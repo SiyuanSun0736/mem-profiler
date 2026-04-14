@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run_metadata",
+  "title": "RunMetadata",
+  "description": "每次采集 session 的元信息。每次运行向 run_metadata.jsonl 追加一条 start 记录和一条 end 记录。",
+  "type": "object",
+  "required": ["schema_version", "run_id", "start_ts_iso", "target_pid", "host_info"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "run_id":         { "type": "string", "description": "UUID v4，标识本次采集 session" },
+    "start_ts_iso":   { "type": "string", "format": "date-time" },
+    "end_ts_iso":     { "type": ["string", "null"], "format": "date-time" },
+    "target_pid":     { "type": "integer", "description": "0 = 采集所有进程" },
+    "target_comm":    { "type": "string" },
+    "window_sec":     { "type": "number", "minimum": 0.001 },
+    "sample_rate":    { "type": "integer", "minimum": 1 },
+    "enabled_probes": {
+      "type": "object",
+      "properties": {
+        "llc":   { "type": "boolean" },
+        "dtlb":  { "type": "boolean" },
+        "fault": { "type": "boolean" }
+      }
+    },
+    "host_info": {
+      "type": "object",
+      "required": ["hostname", "kernel_version"],
+      "properties": {
+        "hostname":       { "type": "string" },
+        "kernel_version": { "type": "string" },
+        "cpu_model":      { "type": "string" },
+        "num_cpus":       { "type": "integer" }
+      }
+    },
+    "binary_path":   { "type": "string" },
+    "binary_sha256": { "type": "string" },
+    "notes":         { "type": "string" }
+  }
+}

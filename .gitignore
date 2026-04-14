@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# eBPF 编译产物
+bpf/*.o
+bpf/*.skel.h
+*.skel.h
+vmlinux.h
+bpf/vmlinux.h
+
+# 数据与结果（体积大，不纳入版本控制）
+data/*
+results/*
+!data/.gitkeep
+!results/.gitkeep
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 编译数据库
+compile_commands.json

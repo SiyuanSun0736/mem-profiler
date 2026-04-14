@@ -1,0 +1,135 @@
+# 数据协议（Data Protocol）
+
+> 版本：1.0  
+> 文件格式：JSON Lines（每行一个 JSON 对象，UTF-8 编码，`.jsonl` 扩展名）
+
+本文档定义 `ebpf-mem-profiler` 与下游消费方（包括 `ebpf-mem-analyzer` 基线仓库）之间的稳定数据接口。  
+只要协议版本不变，下游无需感知上游采集实现的任何变化。
+
+---
+
+## 目录结构约定
+
+每次采集运行产出一个独立子目录，命名建议为 `data/run_<timestamp>/`：
+
+```
+data/run_001/
+├── run_metadata.jsonl       # 元信息（每次运行 1 条 start 记录 + 1 条 end 记录）
+├── window_metrics.jsonl     # 时间窗级聚合指标（主要数据文件）
+├── events.jsonl             # 逐事件记录（仅在 --emit-events 时生成）
+└── [analysis results]       # analysis/ 脚本写入同目录或 results/ 子目录
+```
+
+---
+
+## 1. `run_metadata.jsonl`
+
+每次运行写入两条记录：**start record**（运行开始时）和 **end record**（运行结束时）。
+
+### Start Record 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `schema_version` | `"1.0"` | 协议版本，用于兼容性检查 |
+| `run_id` | string (UUID v4) | 本次运行唯一标识，与 `window_metrics.jsonl` 关联 |
+| `start_ts_iso` | string (ISO 8601) | 采集开始时间 |
+| `end_ts_iso` | null | 运行中为 null，结束后由 end record 携带 |
+| `target_pid` | integer | 目标 PID；0 = 采集所有进程 |
+| `target_comm` | string | 目标进程名（通过 `--comm` 指定时填入） |
+| `window_sec` | number | 时间窗大小（秒） |
+| `sample_rate` | integer | perf 采样比 |
+| `enabled_probes` | object | `{ llc: bool, dtlb: bool, fault: bool }` |
+| `host_info` | object | `{ hostname, kernel_version, cpu_model, num_cpus }` |
+
+### End Record 字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `schema_version` | `"1.0"` | |
+| `run_id` | string | 与 start record 相同 |
+| `end_ts_iso` | string (ISO 8601) | 采集结束时间 |
+| `_record_type` | `"run_end"` | 标识这是 end record |
+
+### 示例
+
+```jsonl
+{"schema_version":"1.0","run_id":"a1b2c3d4-...","start_ts_iso":"2026-04-14T10:00:00+00:00","end_ts_iso":null,"target_pid":1234,"window_sec":1.0,"sample_rate":100,"enabled_probes":{"llc":true,"dtlb":true,"fault":true},"host_info":{"hostname":"dev01","kernel_version":"6.8.0","cpu_model":"Intel Core i7-12700","num_cpus":20}}
+{"schema_version":"1.0","run_id":"a1b2c3d4-...","end_ts_iso":"2026-04-14T10:01:05+00:00","_record_type":"run_end"}
+```
+
+---
+
+## 2. `window_metrics.jsonl`
+
+每个时间窗每个 PID 写入一条记录。一次采集 N 个窗口、每窗口 M 个活跃 PID，则共有 N×M 条记录。
+
+**所有计数字段均为差分值**（本窗口内的增量，而非累积值）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `schema_version` | `"1.0"` | |
+| `run_id` | string | 对应 `run_metadata.jsonl` 中的 `run_id` |
+| `window_id` | integer ≥ 0 | 单调递增窗口序号，第一个窗口为 0 |
+| `start_ns` | integer | 窗口起始时间戳（CLOCK_MONOTONIC，纳秒） |
+| `end_ns` | integer | 窗口结束时间戳（CLOCK_MONOTONIC，纳秒） |
+| `pid` | integer | 进程 ID |
+| `comm` | string | 进程名 |
+| `llc_load_misses` | integer ≥ 0 | 本窗口 LLC load miss 采样计数 |
+| `llc_store_misses` | integer ≥ 0 | 本窗口 LLC store miss 采样计数 |
+| `dtlb_misses` | integer ≥ 0 | 本窗口 dTLB load miss 采样计数 |
+| `minor_faults` | integer ≥ 0 | 本窗口 minor page fault 次数 |
+| `major_faults` | integer ≥ 0 | 本窗口 major page fault 次数 |
+| `samples` | integer ≥ 0 | 本窗口 eBPF handler 触发总次数 |
+
+### 示例
+
+```jsonl
+{"schema_version":"1.0","run_id":"a1b2c3d4-...","window_id":0,"start_ns":1000000000,"end_ns":1001000000000,"pid":1234,"comm":"nginx","llc_load_misses":4521,"llc_store_misses":102,"dtlb_misses":89,"minor_faults":12,"major_faults":0,"samples":4723}
+```
+
+---
+
+## 3. `events.jsonl`（可选）
+
+仅在采集时指定 `--emit-events` 时生成，记录每个被采样事件的详细信息。  
+适用于函数级归因（P2 阶段）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `schema_version` | `"1.0"` | |
+| `run_id` | string | |
+| `ts_ns` | integer | 事件时间戳 |
+| `pid` | integer | |
+| `tid` | integer | 线程 ID |
+| `comm` | string | |
+| `event_type` | integer | 1=llc_load 2=llc_store 3=dtlb 4=minor_fault 5=major_fault |
+| `addr` | integer | 相关内存地址（page fault 时为出错地址，perf_event 时为 IP） |
+| `ip` | integer | 采样时的指令指针 |
+
+---
+
+## 4. `hotspot_summary.jsonl`（下游 / 分析产物）
+
+由 `analysis/hotspot.py` 或 `analysis/attribution.py` 生成，描述热点实体。  
+Schema 见 `export/schema/hotspot_summary.schema.json`。
+
+---
+
+## 与 ebpf-mem-analyzer 的对接方式
+
+使用 `export/to_baseline.py` 将 `window_metrics.jsonl` 转换为基线仓库期望的 CSV 格式：
+
+```bash
+python export/to_baseline.py \
+    --input  data/run_001/ \
+    --output /path/to/ebpf-mem-analyzer/data/new_input/
+```
+
+列映射在 `export/to_baseline.py` 的 `COLUMN_MAP` 字典中集中维护，下游接口变更时只需更新该字典。
+
+---
+
+## 版本兼容性
+
+- 消费方应检查 `schema_version` 字段，遇到未知版本时应拒绝处理而非静默解析。
+- 新增可选字段不递增版本号；删除或重命名字段、修改字段语义时递增主版本号。

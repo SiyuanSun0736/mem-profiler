@@ -1,0 +1,18 @@
+# 用户态依赖（P1 BCC 原型阶段）
+# BCC Python 绑定通常需要通过系统包安装，不在此 pip 安装：
+#   Ubuntu/Debian: sudo apt install python3-bcc
+# 若系统包不可用，可尝试: pip install bcc
+
+# 分析与可视化
+matplotlib>=3.7.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# ELF 解析与符号化
+pyelftools>=0.30
+
+# 终端美化输出
+rich>=13.0.0
+
+# JSON Schema 验证（可选）
+jsonschema>=4.17.0

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "window_metrics",
+  "title": "WindowMetrics",
+  "description": "一个时间窗内一个 PID 的差分访存指标。window_metrics.jsonl 每行一条，对应 (run_id, window_id, pid) 三元组。",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "window_id", "start_ns", "end_ns", "pid"
+  ],
+  "properties": {
+    "schema_version":    { "type": "string", "const": "1.0" },
+    "run_id":            { "type": "string" },
+    "window_id":         { "type": "integer", "minimum": 0 },
+    "start_ns":          { "type": "integer", "description": "窗口起始时间戳 (CLOCK_MONOTONIC ns)" },
+    "end_ns":            { "type": "integer", "description": "窗口结束时间戳 (CLOCK_MONOTONIC ns)" },
+    "pid":               { "type": "integer" },
+    "comm":              { "type": "string" },
+    "llc_load_misses":   { "type": "integer", "minimum": 0 },
+    "llc_store_misses":  { "type": "integer", "minimum": 0 },
+    "dtlb_misses":       { "type": "integer", "minimum": 0 },
+    "minor_faults":      { "type": "integer", "minimum": 0 },
+    "major_faults":      { "type": "integer", "minimum": 0 },
+    "samples":           { "type": "integer", "minimum": 0,
+                           "description": "本窗口内 eBPF handler 触发总次数" }
+  }
+}
