@@ -35,10 +35,14 @@ data/run_001/
 | `start_ts_iso` | string (ISO 8601) | 采集开始时间 |
 | `end_ts_iso` | null | 运行中为 null，结束后由 end record 携带 |
 | `target_pid` | integer | 目标 PID；0 = 采集所有进程 |
+| `target_tid` | integer | 目标 TID；0 = 不按线程过滤 |
 | `target_comm` | string | 目标进程名（通过 `--comm` 指定时填入） |
+| `aggregation_scope` | string | `per_pid` 或 `per_tid` |
 | `window_sec` | number | 时间窗大小（秒） |
 | `sample_rate` | integer | perf 采样比 |
-| `enabled_probes` | object | `{ llc: bool, dtlb: bool, fault: bool }` |
+| `collection_backend` | string | 当前采集后端，例如 `bcc`、`perf_event_open`、`libbpf` |
+| `enabled_probes` | object | `{ llc: bool, dtlb: bool, fault: bool, lbr: bool }` |
+| `observations` | array<object> | 本次运行启用的观测项定义；用于表达 PMU grouping、multiplex 处理方式以及未来的 LBR 接入点 |
 | `host_info` | object | `{ hostname, kernel_version, cpu_model, num_cpus }` |
 
 ### End Record 字段
@@ -53,15 +57,39 @@ data/run_001/
 ### 示例
 
 ```jsonl
-{"schema_version":"1.0","run_id":"a1b2c3d4-...","start_ts_iso":"2026-04-14T10:00:00+00:00","end_ts_iso":null,"target_pid":1234,"window_sec":1.0,"sample_rate":100,"enabled_probes":{"llc":true,"dtlb":true,"fault":true},"host_info":{"hostname":"dev01","kernel_version":"6.8.0","cpu_model":"Intel Core i7-12700","num_cpus":20}}
+{"schema_version":"1.0","run_id":"a1b2c3d4-...","start_ts_iso":"2026-04-14T10:00:00+00:00","end_ts_iso":null,"target_pid":1234,"target_tid":0,"target_comm":"nginx","aggregation_scope":"per_tid","window_sec":1.0,"sample_rate":100,"collection_backend":"bcc","enabled_probes":{"llc":true,"dtlb":true,"fault":true,"lbr":true},"observations":[{"observation_id":"pmu_llc_load_miss","kind":"pmu_sampling","backend":"bcc_perf_event_raw","metrics":["llc_load_misses","samples"],"scope":"per_tid","sample_period":100,"perf_event":{"type":"hw_cache","config":"ll.read.miss"},"group":{"id":"pmu_cache"},"multiplex":{"mode":"opaque_backend","scaling_fields":[]}}],"host_info":{"hostname":"dev01","kernel_version":"6.8.0","cpu_model":"Intel Core i7-12700","num_cpus":20}}
 {"schema_version":"1.0","run_id":"a1b2c3d4-...","end_ts_iso":"2026-04-14T10:01:05+00:00","_record_type":"run_end"}
 ```
+
+### `observations[]` 对象
+
+`observations` 为可选扩展字段，建议在需要表达 PMU 分组、multiplex 缩放质量，或未来接入 LBR 时使用。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `observation_id` | string | 观测项唯一标识，例如 `pmu_llc_load_miss` |
+| `kind` | string | 观测源类别，例如 `pmu_sampling`、`trace_hook`、`lbr_sampling` |
+| `backend` | string | 具体后端，例如 `bcc_perf_event`、`perf_event_open` |
+| `metrics` | array<string> | 该观测项最终贡献到哪些输出字段 |
+| `scope` | string | 采集粒度，例如 `per_pid`、`per_tid` |
+| `sample_period` | integer | 采样周期；仅采样型 observation 需要 |
+| `perf_event` | object | perf 事件描述，如 `{ type, config }` |
+| `group` | object | PMU 分组信息，如 `{ id, role }`；LBR 建议独立成单独组 |
+| `multiplex` | object | multiplex 策略，如 `{ mode, scaling_fields }` |
+| `notes` | string | 兼容性或准确性备注 |
+
+设计建议：
+
+- 优先增加 `observation` 对象，而不是为 LBR 单独再开一套顶层 schema。LBR 应作为 `kind = "lbr_sampling"` 的 observation 接入。
+- 只有语义上必须同步读出的 PMU 才放进同一 `group.id`；像当前 dTLB fallback 与 LLC 近似事件，不应强行声明为同组。
+- 如果后端支持 `perf_event_open` 的 fd 读取，推荐使用 `PERF_FORMAT_GROUP | PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING`，并把 `multiplex.mode` 设为 `time_enabled_running`。
+- 如果后端像当前 BCC 原型一样不暴露 `time_enabled/time_running`，则显式标注 `multiplex.mode = "opaque_backend"`，不要伪装成“已正确缩放”。
 
 ---
 
 ## 2. `window_metrics.jsonl`
 
-每个时间窗每个 PID 写入一条记录。一次采集 N 个窗口、每窗口 M 个活跃 PID，则共有 N×M 条记录。
+每个时间窗每个 PID 或 TID 写入一条记录。一次采集 N 个窗口、每窗口 M 个活跃实体，则共有 N×M 条记录。
 
 **所有计数字段均为差分值**（本窗口内的增量，而非累积值）。
 
@@ -72,19 +100,31 @@ data/run_001/
 | `window_id` | integer ≥ 0 | 单调递增窗口序号，第一个窗口为 0 |
 | `start_ns` | integer | 窗口起始时间戳（CLOCK_MONOTONIC，纳秒） |
 | `end_ns` | integer | 窗口结束时间戳（CLOCK_MONOTONIC，纳秒） |
+| `entity_scope` | string | `pid` 或 `tid` |
 | `pid` | integer | 进程 ID |
+| `tid` | integer | 线程 ID；仅 `entity_scope = "tid"` 时出现 |
 | `comm` | string | 进程名 |
+| `llc_loads` | integer ≥ 0 | 本窗口 LLC load access 采样计数 |
 | `llc_load_misses` | integer ≥ 0 | 本窗口 LLC load miss 采样计数 |
+| `llc_stores` | integer ≥ 0 | 本窗口 LLC store access 采样计数 |
 | `llc_store_misses` | integer ≥ 0 | 本窗口 LLC store miss 采样计数 |
+| `dtlb_loads` | integer ≥ 0 | 本窗口 dTLB load access 采样计数 |
+| `dtlb_load_misses` | integer ≥ 0 | 本窗口 dTLB load miss 采样计数 |
+| `dtlb_stores` | integer ≥ 0 | 本窗口 dTLB store access 采样计数 |
+| `dtlb_store_misses` | integer ≥ 0 | 本窗口 dTLB store miss 采样计数 |
 | `dtlb_misses` | integer ≥ 0 | 本窗口 dTLB load miss 采样计数 |
+| `itlb_loads` | integer ≥ 0 | 本窗口 iTLB load access 采样计数 |
+| `itlb_load_misses` | integer ≥ 0 | 本窗口 iTLB load miss 采样计数 |
 | `minor_faults` | integer ≥ 0 | 本窗口 minor page fault 次数 |
 | `major_faults` | integer ≥ 0 | 本窗口 major page fault 次数 |
+| `lbr_samples` | integer ≥ 0 | 本窗口 LBR 分支栈样本数 |
+| `lbr_entries` | integer ≥ 0 | 本窗口累计导出的 LBR 分支条目数 |
 | `samples` | integer ≥ 0 | 本窗口 eBPF handler 触发总次数 |
 
 ### 示例
 
 ```jsonl
-{"schema_version":"1.0","run_id":"a1b2c3d4-...","window_id":0,"start_ns":1000000000,"end_ns":1001000000000,"pid":1234,"comm":"nginx","llc_load_misses":4521,"llc_store_misses":102,"dtlb_misses":89,"minor_faults":12,"major_faults":0,"samples":4723}
+{"schema_version":"1.0","run_id":"a1b2c3d4-...","window_id":0,"start_ns":1000000000,"end_ns":1001000000000,"entity_scope":"tid","pid":1234,"tid":1239,"comm":"nginx","llc_loads":9812,"llc_load_misses":4521,"llc_stores":2088,"llc_store_misses":102,"dtlb_loads":330,"dtlb_load_misses":89,"dtlb_stores":74,"dtlb_store_misses":11,"dtlb_misses":100,"itlb_loads":55,"itlb_load_misses":7,"minor_faults":12,"major_faults":0,"lbr_samples":45,"lbr_entries":318,"samples":4723}
 ```
 
 ---
@@ -102,9 +142,10 @@ data/run_001/
 | `pid` | integer | |
 | `tid` | integer | 线程 ID |
 | `comm` | string | |
-| `event_type` | integer | 1=llc_load 2=llc_store 3=dtlb 4=minor_fault 5=major_fault |
+| `event_type` | integer | 1=llc_load_miss 2=llc_store_miss 3=dtlb_miss 4=minor_fault 5=major_fault 6=lbr_sample |
 | `addr` | integer | 相关内存地址（page fault 时为出错地址，perf_event 时为 IP） |
 | `ip` | integer | 采样时的指令指针 |
+| `lbr` | array<object> | 可选，仅 LBR 事件出现；每项含 `{ from_ip, to_ip, flags }`，当前最多导出 8 条 |
 
 ---
 

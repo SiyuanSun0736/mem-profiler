@@ -38,12 +38,17 @@ class Exporter:
         self,
         out_dir:      pathlib.Path,
         target_pid:   int   = 0,
+        target_tid:   int   = 0,
         target_comm:  str   = "",
         window_sec:   float = 1.0,
         sample_rate:  int   = 100,
+        emit_events:  bool  = False,
         enable_llc:   bool  = True,
         enable_dtlb:  bool  = True,
+        enable_itlb:  bool  = True,
         enable_fault: bool  = True,
+        enable_lbr:   bool  = False,
+        aggregation_scope: str = "per_pid",
         observations: Optional[list[dict]] = None,
         collection_backend: str = "bcc",
     ) -> None:
@@ -54,6 +59,10 @@ class Exporter:
         # 打开输出文件
         self._meta_f   = open(out_dir / "run_metadata.jsonl",   "a", encoding="utf-8")
         self._window_f = open(out_dir / "window_metrics.jsonl", "a", encoding="utf-8")
+        self._events_f = (
+            open(out_dir / "events.jsonl", "a", encoding="utf-8")
+            if emit_events else None
+        )
 
         # 写入本次运行的元信息
         meta = {
@@ -62,13 +71,17 @@ class Exporter:
             "start_ts_iso":   self._start_iso,
             "end_ts_iso":     None,
             "target_pid":     target_pid,
+            "target_tid":     target_tid,
             "target_comm":    target_comm,
+            "aggregation_scope": aggregation_scope,
             "window_sec":     window_sec,
             "sample_rate":    sample_rate,
             "enabled_probes": {
                 "llc":   enable_llc,
                 "dtlb":  enable_dtlb,
+                "itlb":  enable_itlb,
                 "fault": enable_fault,
+                "lbr":   enable_lbr,
             },
             "collection_backend": collection_backend,
             "observations": observations or [],
@@ -85,12 +98,19 @@ class Exporter:
     # ------------------------------------------------------------------
 
     def write_window(self, snap: WindowSnapshot) -> None:
-        """将一个时间窗的所有 PID 记录追加写入 window_metrics.jsonl。"""
+        """将一个时间窗的聚合记录和逐事件记录追加写入 JSONL。"""
         for entry in snap.entries:
             row = {"schema_version": self.SCHEMA_VERSION, "run_id": self._run_id}
             row.update(entry)
             self._window_f.write(json.dumps(row, ensure_ascii=False) + "\n")
         self._window_f.flush()
+
+        if self._events_f is not None:
+            for event in snap.events:
+                row = {"schema_version": self.SCHEMA_VERSION, "run_id": self._run_id}
+                row.update(event)
+                self._events_f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            self._events_f.flush()
 
     # ------------------------------------------------------------------
 
@@ -109,6 +129,8 @@ class Exporter:
 
         self._meta_f.close()
         self._window_f.close()
+        if self._events_f is not None:
+            self._events_f.close()
 
 
 # ---- 辅助函数 ----

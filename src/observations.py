@@ -63,51 +63,148 @@ def build_default_observations(
     sample_rate: int,
     enable_llc: bool,
     enable_dtlb: bool,
+    enable_itlb: bool,
     enable_fault: bool,
+    enable_lbr: bool,
+    scope: str,
 ) -> list[dict]:
     observations: list[ObservationSpec] = []
 
     if enable_llc:
-        observations.append(
+        observations.extend([
+            ObservationSpec(
+                observation_id="pmu_llc_load",
+                kind="pmu_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["llc_loads", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="ll.read.access",
+                group_id="pmu_cache",
+                multiplex_mode="opaque_backend",
+            ),
             ObservationSpec(
                 observation_id="pmu_llc_load_miss",
                 kind="pmu_sampling",
-                backend="bcc_perf_event",
+                backend="bcc_perf_event_raw",
                 metrics=["llc_load_misses", "samples"],
+                scope=scope,
                 sample_period=sample_rate,
-                perf_type="hardware",
-                perf_config="cache_misses",
+                perf_type="hw_cache",
+                perf_config="ll.read.miss",
                 group_id="pmu_cache",
-                group_role="leader",
+                multiplex_mode="opaque_backend",
+            ),
+            ObservationSpec(
+                observation_id="pmu_llc_store",
+                kind="pmu_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["llc_stores", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="ll.write.access",
+                group_id="pmu_cache",
+                multiplex_mode="opaque_backend",
+            ),
+            ObservationSpec(
+                observation_id="pmu_llc_store_miss",
+                kind="pmu_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["llc_store_misses", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="ll.write.miss",
+                group_id="pmu_cache",
                 multiplex_mode="opaque_backend",
                 notes=(
-                    "BCC attach_perf_event does not expose group leader reads or "
-                    "time_enabled/time_running, so multiplex scaling quality is not "
-                    "exported per window."
+                    "BCC raw perf_event attach does not expose time_enabled/time_running, "
+                    "so per-window multiplex scaling quality is not exported."
                 ),
-            )
-        )
+            ),
+        ])
 
     if enable_dtlb:
-        observations.append(
+        observations.extend([
             ObservationSpec(
-                observation_id="pmu_dtlb_miss",
+                observation_id="pmu_dtlb_load",
                 kind="pmu_sampling",
-                backend="bcc_perf_event",
-                metrics=["dtlb_misses"],
-                sample_period=sample_rate * 10,
-                perf_type="hardware",
-                perf_config="cache_misses_fallback",
-                group_id="pmu_tlb",
-                group_role="leader",
+                backend="bcc_perf_event_raw",
+                metrics=["dtlb_loads", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="dtlb.read.access",
+                group_id="pmu_dtlb",
                 multiplex_mode="opaque_backend",
-                notes=(
-                    "Current prototype uses CACHE_MISSES fallback rather than a raw "
-                    "dTLB event; keep it in a separate group from LLC observations to "
-                    "avoid implying lock-step PMU semantics."
-                ),
-            )
-        )
+            ),
+            ObservationSpec(
+                observation_id="pmu_dtlb_load_miss",
+                kind="pmu_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["dtlb_load_misses", "dtlb_misses", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="dtlb.read.miss",
+                group_id="pmu_dtlb",
+                multiplex_mode="opaque_backend",
+            ),
+            ObservationSpec(
+                observation_id="pmu_dtlb_store",
+                kind="pmu_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["dtlb_stores", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="dtlb.write.access",
+                group_id="pmu_dtlb",
+                multiplex_mode="opaque_backend",
+            ),
+            ObservationSpec(
+                observation_id="pmu_dtlb_store_miss",
+                kind="pmu_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["dtlb_store_misses", "dtlb_misses", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="dtlb.write.miss",
+                group_id="pmu_dtlb",
+                multiplex_mode="opaque_backend",
+            ),
+        ])
+
+    if enable_itlb:
+        observations.extend([
+            ObservationSpec(
+                observation_id="pmu_itlb_load",
+                kind="pmu_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["itlb_loads", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="itlb.read.access",
+                group_id="pmu_itlb",
+                multiplex_mode="opaque_backend",
+            ),
+            ObservationSpec(
+                observation_id="pmu_itlb_load_miss",
+                kind="pmu_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["itlb_load_misses", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hw_cache",
+                perf_config="itlb.read.miss",
+                group_id="pmu_itlb",
+                multiplex_mode="opaque_backend",
+            ),
+        ])
 
     if enable_fault:
         observations.append(
@@ -116,8 +213,27 @@ def build_default_observations(
                 kind="trace_hook",
                 backend="bcc_kprobe",
                 metrics=["minor_faults", "major_faults"],
+                scope=scope,
                 multiplex_mode="not_applicable",
                 notes="Kernel trace hook; no PMU multiplex or group leader semantics.",
+            )
+        )
+
+    if enable_lbr:
+        observations.append(
+            ObservationSpec(
+                observation_id="pmu_lbr_sample",
+                kind="lbr_sampling",
+                backend="bcc_perf_event_raw",
+                metrics=["lbr_samples", "lbr_entries", "samples"],
+                scope=scope,
+                sample_period=sample_rate,
+                perf_type="hardware",
+                perf_config="branch_instructions+branch_stack",
+                group_id="pmu_lbr",
+                group_role="leader",
+                multiplex_mode="opaque_backend",
+                notes="LBR events are exported through events.jsonl with up to 8 branch records per sample.",
             )
         )
 

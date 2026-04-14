@@ -11,7 +11,9 @@
     "start_ts_iso":   { "type": "string", "format": "date-time" },
     "end_ts_iso":     { "type": ["string", "null"], "format": "date-time" },
     "target_pid":     { "type": "integer", "description": "0 = 采集所有进程" },
+    "target_tid":     { "type": "integer", "description": "0 = 不过滤 TID" },
     "target_comm":    { "type": "string" },
+    "aggregation_scope": { "type": "string", "enum": ["per_pid", "per_tid"] },
     "window_sec":     { "type": "number", "minimum": 0.001 },
     "sample_rate":    { "type": "integer", "minimum": 1 },
     "collection_backend": { "type": "string" },
@@ -20,7 +22,8 @@
       "properties": {
         "llc":   { "type": "boolean" },
         "dtlb":  { "type": "boolean" },
-        "fault": { "type": "boolean" }
+        "fault": { "type": "boolean" },
+        "lbr":   { "type": "boolean" }
       }
     },
     "observations": {

@@ -18,6 +18,9 @@
 
 两个仓库通过**稳定数据接口**（`window_metrics.jsonl`）连接，**不共享代码实现**。
 
+为兼容未来的 PMU 分组读取和 LBR 接入，运行元信息层允许携带 `observations[]` 描述；
+它用于表达“观测项如何被采集”，而 `window_metrics.jsonl` 继续表达“最终聚合出了什么指标”。
+
 ---
 
 ## 架构分层
@@ -123,6 +126,8 @@
 3. **符号化精度**：无 DWARF 调试信息时，`addr2line` 仅能返回 `??:0`，需要 `-g` 编译目标程序。
 
 4. **内核版本**：ring buffer（`BPF_MAP_TYPE_RINGBUF`）需要 Linux >= 5.8；`PERCPU_HASH` 差分逻辑需要 >= 5.2。
+
+5. **PMU multiplex / grouping 可见性**：当前 BCC 原型不能导出 `time_enabled/time_running` 或 group leader 联读结果，因此只能在 `run_metadata.jsonl` 的 `observations[]` 中声明策略，不能逐窗口证明缩放质量。若要严肃接入 LBR 或做成组 PMU 统计，应迁移到 `perf_event_open`/libbpf 后端。
 
 ---
 

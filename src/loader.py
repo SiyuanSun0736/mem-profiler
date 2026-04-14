@@ -38,12 +38,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--duration",     type=int,   default=0,
                    help="采集总时长（秒），0 = 手动 Ctrl-C 停止")
     p.add_argument("--sample-rate",  type=int,   default=100,
-                   help="LLC/dTLB perf 采样率（每 N 次硬件事件触发一次 eBPF），默认 100")
+                   help="硬件 perf 采样率（每 N 次事件触发一次 eBPF），默认 100")
     p.add_argument("--emit-events",  action="store_true",
                    help="同时向 ring buffer 写入逐事件记录（大采样量时会增加开销）")
-    p.add_argument("--no-llc",       action="store_true", help="禁用 LLC miss 采样")
-    p.add_argument("--no-dtlb",      action="store_true", help="禁用 dTLB miss 采样")
-    p.add_argument("--no-fault",     action="store_true", help="禁用 page fault 追踪")
+    p.add_argument("--tid",          type=int, default=0,
+                   help="仅追踪指定 TID（线程 ID）；设置后自动启用 per-TID 聚合")
+    p.add_argument("--per-tid",      action="store_true",
+                   help="按 TID 聚合窗口指标，而非按 PID 聚合")
+    p.add_argument("--lbr",          action="store_true",
+                   help="启用 LBR 分支栈采样，并将 LBR 条目写入 events.jsonl")
+    p.add_argument("--no-llc",       action="store_true", help="禁用 LLC 访问/miss 采样（PMU 组 1）")
+    p.add_argument("--no-dtlb",      action="store_true", help="禁用 dTLB 访问/miss 采样（PMU 组 2）")
+    p.add_argument("--no-itlb",      action="store_true", help="禁用 iTLB 访问/miss 采样（PMU 组 3）")
+    p.add_argument("--no-fault",     action="store_true", help="禁用 page fault 追踪（kprobe）")
     return p.parse_args()
 
 
@@ -69,23 +76,32 @@ def main() -> None:
 
     collector = Collector(
         target_pid=target_pid,
+        target_tid=args.tid,
         window_sec=args.window,
         sample_rate=args.sample_rate,
-        emit_events=args.emit_events,
+        emit_events=args.emit_events or args.lbr,
         enable_llc=not args.no_llc,
         enable_dtlb=not args.no_dtlb,
+        enable_itlb=not args.no_itlb,
         enable_fault=not args.no_fault,
+        enable_lbr=args.lbr,
+        per_tid=args.per_tid,
     )
 
     exporter = Exporter(
         out_dir=out_dir,
         target_pid=target_pid,
+        target_tid=args.tid,
         target_comm=target_comm,
         window_sec=args.window,
         sample_rate=args.sample_rate,
+        emit_events=args.emit_events or args.lbr,
         enable_llc=not args.no_llc,
         enable_dtlb=not args.no_dtlb,
+        enable_itlb=not args.no_itlb,
         enable_fault=not args.no_fault,
+        enable_lbr=args.lbr,
+        aggregation_scope="per_tid" if (args.per_tid or args.tid > 0) else "per_pid",
         observations=collector.describe_observations(),
         collection_backend="bcc",
     )
@@ -111,7 +127,7 @@ def main() -> None:
             exporter.write_window(snapshot)
             window_id += 1
             print(
-                f"[window {window_id:04d}] {len(snapshot.entries)} 条 PID 记录",
+                f"[window {window_id:04d}] {len(snapshot.entries)} 条窗口记录 / {len(snapshot.events)} 条事件",
                 flush=True,
             )
     finally:

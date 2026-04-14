@@ -36,6 +36,7 @@ METRICS = [
     "dtlb_misses",
     "minor_faults",
     "major_faults",
+    "lbr_samples",
 ]
 
 EVENT_TYPE_NAMES = {
@@ -44,6 +45,7 @@ EVENT_TYPE_NAMES = {
     3: "dtlb_misses",
     4: "minor_faults",
     5: "major_faults",
+    6: "lbr_samples",
 }
 
 

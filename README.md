@@ -11,8 +11,8 @@
 
 | 能力 | 说明 |
 |------|------|
-| eBPF 数据面 | CO-RE 风格内核程序 + BCC Python 原型，追踪 LLC miss / dTLB miss / page fault |
-| 细粒度指标提取 | 按 PID/TID 和时间窗聚合，输出标准化 JSONL |
+| eBPF 数据面 | CO-RE 风格内核程序 + BCC Python 原型，追踪 LLC / TLB / page fault，并可选导出 LBR |
+| 细粒度指标提取 | 按 PID 或 TID 和时间窗聚合，输出标准化 JSONL |
 | 函数级热点归因 | 符号化采样地址 → 函数 / 文件 / 行号（P2 阶段） |
 | 分析报告生成 | 时序图、热点条形图、指标相关性热力图（matplotlib PDF） |
 | 测量方法学验证 | 采集开销 / 重复稳定性 / 参数敏感性 / 微基准校验实验 |
@@ -103,8 +103,11 @@ sudo python src/loader.py --pid <PID> --window 1.0 --output data/run_001/
 # 按进程名（自动解析 PID）
 sudo python src/loader.py --comm nginx --window 1.0 --output data/run_001/ --duration 60
 
-# 启用逐事件 ring buffer 记录（P2 归因分析所需）
-sudo python src/loader.py --pid <PID> --emit-events --output data/run_001/
+# 按线程聚合并只观察指定 TID
+sudo python src/loader.py --pid <PID> --per-tid --tid <TID> --output data/run_tid/
+
+# 启用逐事件与 LBR 分支栈记录（P2 归因分析所需）
+sudo python src/loader.py --pid <PID> --emit-events --lbr --output data/run_001/
 ```
 
 ### 热点分析（P1：PID 级）
@@ -210,7 +213,7 @@ sudo bash experiments/micro_benchmark/run_micro_bench.sh
 
 ## 已知限制
 
-- **BCC 原型**（P1）：`src/bcc_prog.c` 中的 dTLB miss 使用 `CACHE_MISSES` 作为 fallback，并非真正的 dTLB 硬件计数器。
+- **BCC 原型**（P1）：当前通过 raw perf attr 绑定更多 cache/TLB 事件，但不同 CPU 微架构对事件可用性支持不同；不可用事件会在启动时被自动跳过。
 - **符号化**：无 DWARF 调试信息的二进制文件，addr2line 仅返回 `??:0`，建议以 `-g` 编译目标程序。
 - **CO-RE 版本**：`bpf/mem_events.bpf.c` 需通过 `make` 编译生成 skeleton header 后才能在 libbpf 用户态程序中使用。
 

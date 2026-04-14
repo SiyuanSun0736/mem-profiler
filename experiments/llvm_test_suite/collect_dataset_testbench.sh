@@ -57,6 +57,9 @@
 #                 挂载 LBR 采集事件，覆盖所有子线程（默认 1，需要 CAP_NET_ADMIN）
 #   PRINT_TIME_FIELDS  CSV 中是否输出每个计数器的 _time_enabled/_time_running 列
 #                      1=输出（-E 选项），0=不输出（默认 0）
+#   BENCH_FILTER  只采集指定名称的基准（留空=全部）。用于快速单测，例如：
+#                 BENCH_FILTER=aha bash ... -n   # DRYRUN 冒烟测试
+#                 BENCH_FILTER=aha PMU_WINDOW=10 bash ...  # 短窗口实采
 #
 # 输出文件结构：
 #   data/llvm_test_suite/
@@ -96,26 +99,33 @@ RETRY_MAX="${RETRY_MAX:-3}"
 DRYRUN="${DRYRUN:-0}"
 LBR_TID_MON="${LBR_TID_MON:-1}"
 PRINT_TIME_FIELDS="${PRINT_TIME_FIELDS:-0}"
+BENCH_FILTER="${BENCH_FILTER:-}"
 
 # ── 参数解析 ─────────────────────────────────────────────────────────────────
 usage() {
     echo "用法: $0 [-v VARIANT] [-b BIN_DIR] [-t TEST_DIR] [-d DATA_DIR]"
-    echo "         [-w PMU_WINDOW] [-i INTERVAL_MS] [-c] [-r] [-n]"
+    echo "         [-w PMU_WINDOW] [-i INTERVAL_MS] [-s BENCH] [-c] [-r] [-n]"
     echo "选项:"
-    echo "  -v VARIANT      变体名称（默认 O1-g）"
+    echo "  -v VARIANT      变体名称（默认 O3-g）"
     echo "  -b BIN_DIR      可执行文件目录"
     echo "  -t TEST_DIR     测试规格目录"
     echo "  -d DATA_DIR     PMU CSV 输出目录"
     echo "  -w PMU_WINDOW   采集时长，秒（默认 30）"
     echo "  -i INTERVAL_MS  采样间隔，毫秒（默认 500）"
+    echo "  -s BENCH        只采集指定基准（如 aha、minisat），不指定则全部"
     echo "  -c              持续循环模式"
     echo "  -r              覆盖已有数据"
     echo "  -n              DRYRUN 模式"
     echo "  -h              显示帮助"
+    echo ""
+    echo "快速冒烟测试（无需 pmu_monitor）:"
+    echo "  bash $0 -s aha -n"
+    echo "单基准短窗口实采:"
+    echo "  sudo PMU_WINDOW=10 bash $0 -s aha"
     exit 0
 }
 
-while getopts "v:b:t:d:w:i:crnhT" opt; do
+while getopts "v:b:t:d:w:i:s:crnhT" opt; do
     case $opt in
         v) VARIANT="$OPTARG" ;;
         b) BIN_DIR="$OPTARG" ;;
@@ -123,6 +133,7 @@ while getopts "v:b:t:d:w:i:crnhT" opt; do
         d) DATA_DIR="$OPTARG" ;;
         w) PMU_WINDOW="$OPTARG" ;;
         i) INTERVAL_MS="$OPTARG" ;;
+        s) BENCH_FILTER="$OPTARG" ;;
         c) CONTINUOUS=1 ;;
         r) OVERWRITE=1 ;;
         n) DRYRUN=1 ;;
@@ -213,9 +224,13 @@ cd "$RUN_ROOT"
 [[ -d "$TEST_DIR" ]] || { echo "Error: TEST_DIR 不存在: $TEST_DIR" >&2; exit 1; }
 
 if [[ ! -x "$PMU_MONITOR" ]]; then
-    info "pmu_monitor 未找到，尝试编译..."
-    make -C "$PROJECT_ROOT" 2>&1 | tail -5
-    [[ -x "$PMU_MONITOR" ]] || { echo "Error: pmu_monitor 编译失败" >&2; exit 1; }
+    if [[ "$DRYRUN" -eq 1 ]]; then
+        warn "DRYRUN 模式：pmu_monitor 未找到，跳过编译检查"
+    else
+        info "pmu_monitor 未找到，尝试编译..."
+        make -C "$PROJECT_ROOT" 2>&1 | tail -5
+        [[ -x "$PMU_MONITOR" ]] || { echo "Error: pmu_monitor 编译失败" >&2; exit 1; }
+    fi
 fi
 
 PARANOID=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo "2")
@@ -485,6 +500,7 @@ info "持续循环:   $( [[ $CONTINUOUS -eq 1 ]] && echo '是（Ctrl+C 停止）
 info "最少行数:   ${MIN_ROWS}  |  最大重试: ${RETRY_MAX}"
 info "LBR模式:    $( [[ $LBR_TID_MON -eq 1 ]] && echo '手动挂载（-T，tid_monitor）' || echo '默认（仅根PID）')"
 info "time字段:   $( [[ $PRINT_TIME_FIELDS -eq 1 ]] && echo '输出（-E）' || echo '不输出（默认）')"
+[[ -n "$BENCH_FILTER" ]] && warn "★ 单基准模式：仅处理 '$BENCH_FILTER' ★"
 [[ "$DRYRUN" -eq 1 ]] && warn "★ DRYRUN 模式：仅解析命令，不执行采集 ★"
 echo
 
@@ -496,6 +512,12 @@ local _pass_ok=0 _pass_skip=0
 for test_subdir in "$TEST_DIR"/*/; do
     [[ -d "$test_subdir" ]] || continue
     bench_name="$(basename "$test_subdir")"
+
+    # ── BENCH_FILTER：跳过不匹配的基准 ──────────────────────────────────────
+    if [[ -n "$BENCH_FILTER" && "$bench_name" != "$BENCH_FILTER" ]]; then
+        continue
+    fi
+
     ((COUNT_TOTAL++)) || true
 
     info "[$COUNT_TOTAL] $bench_name  (轮次 $ROUND)"
