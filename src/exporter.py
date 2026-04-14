@@ -44,6 +44,8 @@ class Exporter:
         enable_llc:   bool  = True,
         enable_dtlb:  bool  = True,
         enable_fault: bool  = True,
+        observations: Optional[list[dict]] = None,
+        collection_backend: str = "bcc",
     ) -> None:
         self._out   = out_dir
         self._run_id = str(uuid.uuid4())
@@ -68,6 +70,8 @@ class Exporter:
                 "dtlb":  enable_dtlb,
                 "fault": enable_fault,
             },
+            "collection_backend": collection_backend,
+            "observations": observations or [],
             "host_info": {
                 "hostname":       socket.gethostname(),
                 "kernel_version": platform.release(),

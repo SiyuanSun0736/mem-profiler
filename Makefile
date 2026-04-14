@@ -11,6 +11,7 @@ KERNEL_BTF ?= /sys/kernel/btf/vmlinux
 # 包含路径：优先系统 libbpf，其次 bpf/
 BPF_CFLAGS  = -g -O2 -target bpf \
               -D__TARGET_ARCH_$(ARCH) \
+			  -Wno-missing-declarations \
               -I/usr/include/$(shell uname -m)-linux-gnu \
               -Ibpf
 

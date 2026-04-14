@@ -86,6 +86,8 @@ def main() -> None:
         enable_llc=not args.no_llc,
         enable_dtlb=not args.no_dtlb,
         enable_fault=not args.no_fault,
+        observations=collector.describe_observations(),
+        collection_backend="bcc",
     )
 
     stop_flag = [False]

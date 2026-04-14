@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from observations import build_default_observations
+
 _BCC_PROG_PATH = pathlib.Path(__file__).parent / "bcc_prog.c"
 
 
@@ -98,6 +100,12 @@ class Collector:
         self.enable_llc   = enable_llc
         self.enable_dtlb  = enable_dtlb
         self.enable_fault = enable_fault
+        self._observations = build_default_observations(
+            sample_rate=sample_rate,
+            enable_llc=enable_llc,
+            enable_dtlb=enable_dtlb,
+            enable_fault=enable_fault,
+        )
 
         self._bpf: Optional[object] = None
         self._prev: dict[int, PidStats] = {}
@@ -121,7 +129,8 @@ class Collector:
 
         # 写入目标 PID 过滤值
         if self.target_pid:
-            bpf["target_pid_map"][ctypes.c_uint32(0)] = ctypes.c_uint32(self.target_pid)
+            target_pid_map = bpf["target_pid_map"]
+            target_pid_map[target_pid_map.Key(0)] = target_pid_map.Leaf(self.target_pid)
 
         # LLC load miss（CACHE_MISSES 是最通用的近似）
         if self.enable_llc:
@@ -150,9 +159,13 @@ class Collector:
         if self.enable_fault:
             bpf.attach_kprobe(
                 event=b"handle_mm_fault",
-                fn_name=b"kprobe__handle_mm_fault",
+                fn_name=b"on_page_fault",
             )
             print("[probe] handle_mm_fault kprobe", flush=True)
+
+    def describe_observations(self) -> list[dict]:
+        """返回本次运行的 observation 元数据，用于写入 run_metadata。"""
+        return list(self._observations)
 
     # ------------------------------------------------------------------
 

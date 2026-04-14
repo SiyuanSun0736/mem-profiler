@@ -14,12 +14,57 @@
     "target_comm":    { "type": "string" },
     "window_sec":     { "type": "number", "minimum": 0.001 },
     "sample_rate":    { "type": "integer", "minimum": 1 },
+    "collection_backend": { "type": "string" },
     "enabled_probes": {
       "type": "object",
       "properties": {
         "llc":   { "type": "boolean" },
         "dtlb":  { "type": "boolean" },
         "fault": { "type": "boolean" }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["observation_id", "kind", "backend", "metrics", "scope", "multiplex"],
+        "properties": {
+          "observation_id": { "type": "string" },
+          "kind": { "type": "string", "description": "例如 pmu_sampling / trace_hook / lbr_sampling" },
+          "backend": { "type": "string", "description": "例如 bcc_perf_event / perf_event_open / libbpf" },
+          "metrics": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "scope": { "type": "string" },
+          "sample_period": { "type": "integer", "minimum": 1 },
+          "perf_event": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string" },
+              "config": { "type": "string" }
+            }
+          },
+          "group": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "role": { "type": "string" }
+            }
+          },
+          "multiplex": {
+            "type": "object",
+            "required": ["mode", "scaling_fields"],
+            "properties": {
+              "mode": { "type": "string", "description": "例如 opaque_backend / time_enabled_running / not_applicable" },
+              "scaling_fields": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "notes": { "type": "string" }
+        }
       }
     },
     "host_info": {

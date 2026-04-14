@@ -44,10 +44,13 @@ ebpf-mem-profiler/
 │   ├── schema/                 # JSON Schema（run_metadata / window_metrics / hotspot_summary）
 │   └── to_baseline.py          # 格式转换适配器
 ├── experiments/
+│   ├── llvm_test_suite/       # llvm-test-suite 提取与 PMU 采集脚本
 │   ├── overhead/               # P3：采集开销测试
 │   ├── stability/              # P3：重复运行稳定性测试
 │   ├── sensitivity/            # P3：参数敏感性测试
 │   └── micro_benchmark/        # P3：微基准校验
+├── third_party/
+│   └── llvm-test-suite/        # llvm-test-suite submodule
 ├── data/                       # 原始采集数据（gitignore）
 ├── results/                    # 分析结果与图表（gitignore）
 ├── docs/
@@ -140,6 +143,27 @@ python export/to_baseline.py \
     --input  data/run_001/ \
     --output /path/to/ebpf-mem-analyzer/data/new_input/
 ```
+
+### llvm-test-suite 数据集准备
+
+```bash
+git submodule update --init --recursive
+
+# 在 third_party/llvm-test-suite 中完成构建后，提取 ELF 和 .test 运行规格
+bash experiments/llvm_test_suite/extract_elf.sh -n
+
+# 正式提取
+bash experiments/llvm_test_suite/extract_elf.sh -b build-O1-g -v O1-g
+
+# 基于提取结果执行 PMU 采集
+sudo bash experiments/llvm_test_suite/collect_dataset_testbench.sh
+```
+
+默认输出：
+- `data/llvm_test_suite/bin/<VARIANT>`：提取的 ELF
+- `data/llvm_test_suite/test/<VARIANT>`：对应 .test 与运行时文件
+- `data/llvm_test_suite/pmu/<VARIANT>`：PMU CSV
+- `results/llvm_test_suite/log/`：脚本与 pmu_monitor 运行日志
 
 ---
 

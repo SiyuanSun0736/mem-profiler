@@ -6,7 +6,9 @@
  */
 #pragma once
 
+#ifndef __VMLINUX_H__
 #include <linux/types.h>
+#endif
 
 /* ------------------------------------------------------------------ */
 /* 采集器配置（存放于 config_map[0]）                                  */

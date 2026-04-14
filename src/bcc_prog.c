@@ -13,6 +13,17 @@
 #include <linux/mm_types.h>
 #include <linux/mm.h>
 
+/*
+ * BCC 的 helpers.h 只前置声明了 struct bpf_perf_event_data，
+ * 但 perf_event handler 里需要读取 regs。这里补一个与内核公开 UAPI
+ * 一致的最小定义，避免依赖 CO-RE 的 vmlinux.h。
+ */
+struct bpf_perf_event_data {
+    struct pt_regs regs;
+    u64 sample_period;
+    u64 addr;
+};
+
 /* ------------------------------------------------------------------ */
 /* 共享结构体（与 bpf/mem_events.h 保持字段语义一致）                   */
 /* ------------------------------------------------------------------ */
@@ -141,10 +152,10 @@ int on_dtlb_miss(struct bpf_perf_event_data *ctx)
 /* Page Fault 追踪（kprobe/handle_mm_fault）                            */
 /* ------------------------------------------------------------------ */
 
-int kprobe__handle_mm_fault(struct pt_regs *ctx,
-                             struct vm_area_struct *vma,
-                             unsigned long address,
-                             unsigned int flags)
+int on_page_fault(struct pt_regs *ctx,
+                  struct vm_area_struct *vma,
+                  unsigned long address,
+                  unsigned int flags)
 {
     u64 pidtid = bpf_get_current_pid_tgid();
     u32 pid = pidtid >> 32, tid = (u32)pidtid;
