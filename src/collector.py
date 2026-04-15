@@ -372,7 +372,8 @@ class Collector:
             )
 
         src = _BCC_PROG_PATH.read_text()
-        self._bpf = BPF(text=src)
+        src_dir = str(_BCC_PROG_PATH.parent)
+        self._bpf = BPF(text=src, cflags=[f"-I{src_dir}"])
         bpf = self._bpf
 
         if self.target_pid:

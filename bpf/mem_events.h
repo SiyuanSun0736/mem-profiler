@@ -73,8 +73,8 @@ struct pid_mem_stats {
 
 #define MAX_LBR_ENTRIES           8
 
-/* 单条 LBR（Last Branch Record）分支记录 */
-struct lbr_entry {
+/* 单条 LBR（Last Branch Record）分支记录（避免与 vmlinux.h 中的 lbr_entry 冲突） */
+struct lbr_sample {
     __u64 from_ip;
     __u64 to_ip;
     __u64 flags;   /* mispred/predicted/cycles 等，直接取 perf_branch_entry 第三字 */
@@ -91,5 +91,5 @@ struct mem_event {
     __u32 _pad1;
     __u64 addr;         /* 出错/采样地址 */
     __u64 ip;           /* 采样时的指令指针 */
-    struct lbr_entry lbr[MAX_LBR_ENTRIES]; /* LBR 数据（非 LBR 事件时全零） */
+    struct lbr_sample lbr[MAX_LBR_ENTRIES]; /* LBR 数据（非 LBR 事件时全零） */
 };

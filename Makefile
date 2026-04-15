@@ -20,6 +20,9 @@ BPF_OBJ     = bpf/mem_events.bpf.o
 SKEL_HEADER = bpf/mem_events.skel.h
 VMLINUX_H   = bpf/vmlinux.h
 
+# 所有 bpf/ 头文件：任意一个变更均触发重编译
+BPF_HDRS    = $(wildcard bpf/*.h bpf/*.bpf.h)
+
 .PHONY: all clean vmlinux help
 
 all: vmlinux $(BPF_OBJ) $(SKEL_HEADER)
@@ -31,7 +34,7 @@ $(VMLINUX_H):
 	@echo "[GEN]  $@"
 	$(BPFTOOL) btf dump file $(KERNEL_BTF) format c > $@
 
-$(BPF_OBJ): $(BPF_SRC) bpf/mem_events.h $(VMLINUX_H)
+$(BPF_OBJ): $(BPF_SRC) $(BPF_HDRS)
 	@echo "[BPF]  $@"
 	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
 
