@@ -120,6 +120,106 @@ python analysis/hotspot.py \
     --top 20
 ```
 
+### 批量热点分析（多次 run 目录）
+
+适用于 `data/llvm_test_suite/bcc/O3-g` 这类目录下包含多个 `aha_*` 运行子目录的数据集。
+
+```bash
+python analysis/dataset_hotspot.py \
+    --data-root data/llvm_test_suite/bcc/O3-g \
+    --output results/llvm_test_suite/aha_O3-g_hotspots \
+    --metric llc_load_misses \
+    --top 20
+```
+
+默认输出：
+
+- `run_hotspot_summary.csv/jsonl`：每个 run 的热点窗口数量、最大热点分数、指标总量
+- `dataset_hotspots_<metric>.csv/jsonl`：跨 run 热点窗口排行
+- `dataset_attribution_<metric>.csv/jsonl`：每个热点窗口的 Top-N 归因实体
+- `entity_hotspots_<metric>.csv/jsonl`：按 run 内 PID/TID 聚合的热点实体摘要
+
+一次分析所有指标：
+
+```bash
+python analysis/dataset_hotspot.py \
+    --data-root data/llvm_test_suite/bcc/O3-g \
+    --output results/llvm_test_suite/aha_O3-g_hotspots \
+    --all-metrics \
+    --top 20
+```
+
+多指标模式还会额外输出：
+
+- `metrics_overview.csv/jsonl`：所有指标的热点窗口数量、峰值热点分数与最强热点窗口位置
+- `run_hotspot_summary_<metric>.csv/jsonl`：按指标拆分的 run 级摘要
+
+绘制跨 run 热点图：
+
+```bash
+python analysis/dataset_hotspot_report.py \
+    --results results/llvm_test_suite/aha_O3-g_hotspots \
+    --output results/llvm_test_suite/aha_O3-g_hotspots/figures \
+    --top 10
+```
+
+默认生成：
+
+- `metrics_overview.pdf`：多指标热点总览
+- `dataset_hotspots_<metric>.pdf`：跨 run 热点窗口条形图
+- `entity_hotspots_<metric>.pdf`：热点归因实体条形图
+
+### 一键生成归因报告
+
+默认直接读取 `data/llvm_test_suite/bcc/O3-g`，一次跑完全部预定义指标，并输出到 `results/llvm_test_suite/aha_O3-g_attribution_report`：
+
+```bash
+python analysis/attribution_report.py
+```
+
+如果只想跑单个指标，或者改数据目录、输出目录：
+
+```bash
+python analysis/attribution_report.py \
+    --data-root data/llvm_test_suite/bcc/O3-g \
+    --output results/llvm_test_suite/custom_attribution_report \
+    --metric dtlb_misses
+```
+
+默认产出：
+
+- `dataset_attribution_<metric>.csv/jsonl`：每个指标对应的热点窗口归因实体明细
+- `entity_hotspots_<metric>.csv/jsonl`：每个指标对应的 run 内热点实体摘要
+- `run_hotspot_summary_<metric>.csv/jsonl`：多指标模式下每个指标的 run 级汇总
+- `metrics_overview.csv/jsonl`：指标总览
+- `attribution_report.md`：Markdown 归因摘要
+- `figures/*.pdf`：热点窗口、归因实体及多指标总览图表
+
+### 一键生成指标时序关系报告
+
+默认直接读取 `data/llvm_test_suite/bcc/O3-g`，输出到 `results/llvm_test_suite/aha_O3-g_metric_relations`：
+
+```bash
+python analysis/metric_relation_report.py
+```
+
+也可以自定义数据目录、输出目录和滞后窗口范围：
+
+```bash
+python analysis/metric_relation_report.py \
+    --data-root data/llvm_test_suite/bcc/O3-g \
+    --output results/llvm_test_suite/custom_metric_relations \
+    --max-lag 8
+```
+
+默认产出：
+
+- `run_metric_relation_summary.csv/jsonl`：每个 run 的可用指标数、指标对数和最强指标对
+- `dataset_metric_pairs.csv/jsonl`：跨 run 的指标对明细，包含 `pearson_r`、`peak_lag`、`co_spike_count`
+- `metric_pair_overview.csv/jsonl`：按指标对汇总的均值相关性、主导滞后和联合热点统计
+- `metric_relation_report.md`：Markdown 时序关系摘要
+- `figures/*.pdf`：指标对强度总览和联合热点总览图表
+
 ### 函数级归因（P2，需先以 `--emit-events` 采集）
 
 ```bash
