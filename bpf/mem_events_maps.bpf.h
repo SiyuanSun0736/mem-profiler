@@ -28,3 +28,15 @@ struct {
     __type(key,   __u32);
     __type(value, struct collector_config);
 } config_map SEC(".maps");
+
+/*
+ * child_pid_set — 子进程/线程 PID 集合（用户态由后台线程维护）
+ * 用于在 target_pid 不匹配时允许其子代的事件通过。
+ * key = child PID，value = 1（仅用作存在标志）。
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key,   __u32);
+    __type(value, __u8);
+} child_pid_set SEC(".maps");

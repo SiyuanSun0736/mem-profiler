@@ -24,15 +24,47 @@ static __always_inline bool per_tid_enabled(void)
     return enabled && *enabled != 0;
 }
 
+static __always_inline bool comm_allowed(void)
+{
+    u32 key = 0;
+    struct task_comm_filter_t *filter = target_comm_map.lookup(&key);
+    char comm_buf[TASK_COMM_LEN] = {};
+
+    if (!filter || filter->comm[0] == '\0')
+        return true;
+
+    bpf_get_current_comm(comm_buf, sizeof(comm_buf));
+
+#pragma unroll
+    for (int i = 0; i < TASK_COMM_LEN; i++) {
+        if (filter->comm[i] != comm_buf[i])
+            return false;
+        if (filter->comm[i] == '\0')
+            break;
+    }
+
+    return true;
+}
+
 static __always_inline bool task_allowed(u32 pid, u32 tid)
 {
     u32 key = 0;
     u32 *tpid = target_pid_map.lookup(&key);
     u32 *ttid = target_tid_map.lookup(&key);
 
-    if (tpid && *tpid != 0 && *tpid != pid)
-        return false;
+    if (tpid && *tpid != 0 && *tpid != pid) {
+        /*
+         * PID 不匹配根进程 — 检查 child_pid_set。
+         * Python 端后台线程会将已知子进程/线程 PID 写入此 map，
+         * 从而让继承链上的所有代均能通过过滤。
+         */
+        u8 *in_set = child_pid_set.lookup(&pid);
+        if (!in_set)
+            return false;
+    }
     if (ttid && *ttid != 0 && *ttid != tid)
+        return false;
+    if (!comm_allowed())
         return false;
     return true;
 }

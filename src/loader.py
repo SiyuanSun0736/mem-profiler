@@ -18,7 +18,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 from collector import Collector
-from filter import resolve_pid_by_comm
+from filter import list_pids_by_comm
 from exporter import Exporter
 
 
@@ -29,7 +29,11 @@ def parse_args() -> argparse.Namespace:
     )
     target = p.add_mutually_exclusive_group(required=True)
     target.add_argument("--pid",  type=int, help="目标进程 PID")
-    target.add_argument("--comm", type=str, help="目标进程名（至多 15 字符）")
+    target.add_argument(
+        "--comm",
+        type=str,
+        help="目标进程名（至多 15 字符）；将以全局 perf 采样 + eBPF comm 过滤方式跟踪当前和后续同名进程",
+    )
 
     p.add_argument("--window",       type=float, default=1.0,
                    help="聚合时间窗（秒），默认 1.0")
@@ -51,6 +55,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-dtlb",      action="store_true", help="禁用 dTLB 访问/miss 采样（PMU 组 2）")
     p.add_argument("--no-itlb",      action="store_true", help="禁用 iTLB 访问/miss 采样（PMU 组 3）")
     p.add_argument("--no-fault",     action="store_true", help="禁用 page fault 追踪（kprobe）")
+    p.add_argument(
+        "--track-children",
+        action="store_true",
+        help=(
+            "追踪目标进程的子进程和子线程（仅对 --pid 模式有效）。\n"
+            "LLC/dTLB/iTLB: perf_event inherit=1，内核自动继承。\n"
+            "LBR: 硬件限制不支持 inherit，轮切为 pid=-1 全局挂载 + eBPF child_pid_set 过滤。\n"
+            "page fault kprobe: 已是全局探针，内核 child_pid_set 控制过滤。"
+        ),
+    )
     return p.parse_args()
 
 
@@ -60,23 +74,29 @@ def main() -> None:
     out_dir = pathlib.Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 解析目标 PID
+    # 解析目标 PID / comm
     target_pid: int = 0
     target_comm: str = ""
     if args.pid:
         target_pid = args.pid
     elif args.comm:
-        target_comm = args.comm
-        target_pid = resolve_pid_by_comm(args.comm)
-        if target_pid == 0:
+        target_comm = args.comm[:15]
+        matched_pids = list_pids_by_comm(target_comm)
+        if matched_pids:
             print(
-                f"[警告] 未找到名为 '{args.comm}' 的进程，将采集所有进程事件",
+                f"[info] --comm 模式将过滤 comm='{target_comm}'；当前匹配 {len(matched_pids)} 个 PID，perf 事件将以全局模式挂载",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[警告] 当前未找到名为 '{target_comm}' 的进程；将继续等待后续同名进程并采集其事件",
                 file=sys.stderr,
             )
 
     collector = Collector(
         target_pid=target_pid,
         target_tid=args.tid,
+        target_comm=target_comm,
         window_sec=args.window,
         sample_rate=args.sample_rate,
         emit_events=args.emit_events or args.lbr,
@@ -86,6 +106,7 @@ def main() -> None:
         enable_fault=not args.no_fault,
         enable_lbr=args.lbr,
         per_tid=args.per_tid,
+        track_children=args.track_children,
     )
 
     exporter = Exporter(

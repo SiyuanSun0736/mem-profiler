@@ -23,25 +23,11 @@ struct bpf_perf_event_data {
     u64 addr;
 };
 
-static long (*bpf_read_branch_records)(struct bpf_perf_event_data *ctx,
-                                       void *buf,
-                                       u32 size,
-                                       u64 flags) = (void *)119;
-
 /*
- * bpf_perf_prog_read_value(ctx, buf, buf_size)
- * Read the actual PMU counter value (counter, enabled_ns, running_ns) for
- * the perf_event that triggered this BPF program.  Helper index 63.
- * Returns 0 on success, negative errno on failure.
+ * bpf_read_branch_records, bpf_perf_event_value, bpf_perf_prog_read_value
+ * are already declared by BCC's helpers.h / bpf.h with int (*) return type.
+ * Do not re-declare them here to avoid redefinition conflicts.
  */
-struct bpf_perf_event_value {
-    u64 counter;
-    u64 enabled;
-    u64 running;
-};
-static long (*bpf_perf_prog_read_value)(struct bpf_perf_event_data *ctx,
-                                        struct bpf_perf_event_value *buf,
-                                        u32 buf_size) = (void *)63;
 
 #define MAX_LBR_ENTRIES 8
 
@@ -52,6 +38,10 @@ static long (*bpf_perf_prog_read_value)(struct bpf_perf_event_data *ctx,
 struct entity_key_t {
     u32 pid;
     u32 tid;
+};
+
+struct task_comm_filter_t {
+    char comm[TASK_COMM_LEN];
 };
 
 struct pid_mem_stats_t {

@@ -67,6 +67,7 @@ def build_default_observations(
     enable_fault: bool,
     enable_lbr: bool,
     scope: str,
+    llc_store_via_generic: bool = False,
 ) -> list[dict]:
     observations: list[ObservationSpec] = []
 
@@ -103,10 +104,16 @@ def build_default_observations(
                 metrics=["llc_stores", "samples"],
                 scope=scope,
                 sample_period=sample_rate,
-                perf_type="hw_cache",
-                perf_config="ll.write.access",
+                perf_type="hardware" if llc_store_via_generic else "hw_cache",
+                perf_config="cache_references" if llc_store_via_generic else "ll.write.access",
                 group_id="pmu_cache",
                 multiplex_mode="opaque_backend",
+                notes=(
+                    "Hardware does not support LLC write sampling (e.g. Intel Skylake). "
+                    "Proxy: PERF_COUNT_HW_CACHE_REFERENCES (all LLC accesses). "
+                    "Field llc_stores approximates total LLC reference samples."
+                    if llc_store_via_generic else None
+                ),
             ),
             ObservationSpec(
                 observation_id="pmu_llc_store_miss",
@@ -115,13 +122,18 @@ def build_default_observations(
                 metrics=["llc_store_misses", "samples"],
                 scope=scope,
                 sample_period=sample_rate,
-                perf_type="hw_cache",
-                perf_config="ll.write.miss",
+                perf_type="hardware" if llc_store_via_generic else "hw_cache",
+                perf_config="cache_misses" if llc_store_via_generic else "ll.write.miss",
                 group_id="pmu_cache",
                 multiplex_mode="opaque_backend",
                 notes=(
-                    "BCC raw perf_event attach does not expose time_enabled/time_running, "
-                    "so per-window multiplex scaling quality is not exported."
+                    "Hardware does not support LLC write miss sampling (e.g. Intel Skylake). "
+                    "Proxy: PERF_COUNT_HW_CACHE_MISSES (all LLC misses). "
+                    "Field llc_store_misses approximates total LLC miss samples."
+                    if llc_store_via_generic else (
+                        "BCC raw perf_event attach does not expose time_enabled/time_running, "
+                        "so per-window multiplex scaling quality is not exported."
+                    )
                 ),
             ),
         ])

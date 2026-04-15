@@ -22,13 +22,14 @@ struct entity_key {
 /* 采集器配置（存放于 config_map[0]）                                  */
 /* ------------------------------------------------------------------ */
 struct collector_config {
-    __u32 target_pid;    /* 目标 PID；0 = 采集所有进程 */
-    __u32 target_tid;    /* 目标 TID；0 = 不过滤线程 */
-    __u64 window_ns;     /* 时间窗大小（纳秒），用于用户态对齐，内核侧不使用 */
-    __u8  emit_events;   /* 1 = 向 ring buffer 输出逐事件记录 */
-    __u8  per_tid;       /* 1 = 以 (pid,tid) 为 map 键，做线程级聚合 */
-    __u8  enable_lbr;    /* 1 = on_lbr_sample 处理器已挂载，记录 LBR 数据 */
-    __u8  _pad1[5];
+    __u32 target_pid;      /* 目标 PID；0 = 采集所有进程 */
+    __u32 target_tid;      /* 目标 TID；0 = 不过滤线程 */
+    __u64 window_ns;       /* 时间窗大小（纳秒），用于用户态对齐，内核侧不使用 */
+    __u8  emit_events;     /* 1 = 向 ring buffer 输出逐事件记录 */
+    __u8  per_tid;         /* 1 = 以 (pid,tid) 为 map 键，做线程级聚合 */
+    __u8  enable_lbr;      /* 1 = on_lbr_sample 处理器已挂载，记录 LBR 数据 */
+    __u8  track_children;  /* 1 = 同时采集目标进程的子进程/线程（配合 child_pid_set） */
+    __u8  _pad1[4];
 };
 
 /* ------------------------------------------------------------------ */

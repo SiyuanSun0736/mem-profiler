@@ -10,15 +10,46 @@ collector.py — BCC 程序加载与周期性数据读取
 
 import ctypes
 import pathlib
+import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+# perf_event_attr.flags 中表示 inherit 的永久位置（kernel 规范：踤足 0=disabled, 1=inherit …）
+_PERF_ATTR_FLAG_INHERIT: int = 1 << 1
 
 from observations import build_default_observations
 
 _BCC_PROG_PATH = pathlib.Path(__file__).parent / "bcc_prog.c"
 _MAX_LBR_ENTRIES = 8
+
+
+def _expand_bcc_source(src_path: pathlib.Path) -> str:
+    """Inline-expand local #include "..." so all BPF entry-point functions
+    appear in the main source text.  BCC only recognises functions defined
+    directly in the top-level text as programs; functions that arrive via
+    #include'd headers are invisible to bpf_function_start()."""
+    src_dir = src_path.parent
+    seen: set[pathlib.Path] = {src_path.resolve()}
+
+    def expand(text: str) -> str:
+        def replacer(match: re.Match) -> str:
+            fname = match.group(1)
+            fpath = (src_dir / fname).resolve()
+            if fpath in seen or not fpath.exists():
+                return match.group(0)  # keep unknown / already-expanded
+            seen.add(fpath)
+            content = fpath.read_text()
+            # Strip #pragma once so the inlined content doesn't break
+            content = re.sub(r'^[ \t]*#pragma[ \t]+once[ \t]*\n',
+                             '', content, flags=re.MULTILINE)
+            return expand(content)   # recurse for nested local includes
+
+        return re.sub(r'#include\s+"([^"]+)"', replacer, text)
+
+    return expand(src_path.read_text())
 
 _PERF_COUNT_HW_CACHE_LL = 2
 _PERF_COUNT_HW_CACHE_DTLB = 3
@@ -28,6 +59,8 @@ _PERF_COUNT_HW_CACHE_OP_WRITE = 1
 _PERF_COUNT_HW_CACHE_RESULT_ACCESS = 0
 _PERF_COUNT_HW_CACHE_RESULT_MISS = 1
 _PERF_COUNT_HW_BRANCH_INSTRUCTIONS = 4
+_PERF_COUNT_HW_CACHE_REFERENCES = 4   # PERF_TYPE_HARDWARE generic cache references
+_PERF_COUNT_HW_CACHE_MISSES = 5       # PERF_TYPE_HARDWARE generic cache misses
 _PERF_SAMPLE_BRANCH_STACK = 1 << 11
 _PERF_SAMPLE_BRANCH_USER = 1 << 0
 _PERF_SAMPLE_BRANCH_ANY = 1 << 3
@@ -93,6 +126,10 @@ class _MemEventCtype(ctypes.Structure):
         ("ip", ctypes.c_uint64),
         ("lbr", _LbrEntryCtype * _MAX_LBR_ENTRIES),
     ]
+
+
+class _TaskCommFilterCtype(ctypes.Structure):
+    _fields_ = [("comm", ctypes.c_char * 16)]
 
 
 @dataclass
@@ -165,6 +202,7 @@ class Collector:
         self,
         target_pid: int = 0,
         target_tid: int = 0,
+        target_comm: str = "",
         window_sec: float = 1.0,
         sample_rate: int = 100,
         emit_events: bool = False,
@@ -174,9 +212,11 @@ class Collector:
         enable_fault: bool = True,
         enable_lbr: bool = False,
         per_tid: bool = False,
+        track_children: bool = False,
     ) -> None:
         self.target_pid = target_pid
         self.target_tid = target_tid
+        self.target_comm = target_comm[:15]
         self.window_sec = window_sec
         self.sample_rate = sample_rate
         self.emit_events = emit_events or enable_lbr
@@ -186,6 +226,9 @@ class Collector:
         self.enable_fault = enable_fault
         self.enable_lbr = enable_lbr
         self.per_tid = per_tid or target_tid > 0
+        # track_children 只在指定了具体 target_pid 时才生效；
+        # comm 模式本就是全局采样，子进程总能被内核防弹层捕获。
+        self.track_children: bool = track_children and (target_pid > 0)
         self._observations = build_default_observations(
             sample_rate=sample_rate,
             enable_llc=enable_llc,
@@ -200,6 +243,11 @@ class Collector:
         self._prev: dict[tuple[int, int], PidStats] = {}
         self._pending_events: list[dict] = []
         self._events_open = False
+        # 子进程追踪（track_children=True 时开启）
+        self._tracked_child_pids: set[int] = set()
+        self._child_monitor_lock: threading.Lock = threading.Lock()
+        self._child_monitor_stop: Optional[threading.Event] = None
+        self._child_monitor_thread: Optional[threading.Thread] = None
 
     def _make_attr(
         self,
@@ -208,6 +256,7 @@ class Collector:
         sample_period: int,
         sample_type: int = 0,
         branch_sample_type: int = 0,
+        inherit: bool = False,
     ) -> Any:
         from bcc.perf import Perf
 
@@ -217,13 +266,28 @@ class Collector:
         attr.sample_period = sample_period
         attr.sample_type = sample_type
         attr.branch_sample_type = branch_sample_type
+        if inherit:
+            # 设置 perf_event_attr.inherit 位（flags 第 1 位）。
+            # BCC 的 ctypes 结构将位字段打包进the单个 flags u64字段；
+            # 直接 attr.inherit = 1 在部分 BCC 版本下不会卸写 C 结构内存。
+            attr.flags = getattr(attr, "flags", 0) | _PERF_ATTR_FLAG_INHERIT
         return attr
 
-    def _attach_raw_event(self, attr: Any, fn_name: str, label: str) -> bool:
-        """Attach a single independent perf event (no group)."""
+    def _attach_raw_event(
+        self, attr: Any, fn_name: str, label: str,
+        pid_override: Optional[int] = None,
+    ) -> bool:
+        """Attach a single independent perf event (no group).
+
+        pid_override: 若提供，采用该 pid 而不是 self.target_pid。
+            传入 -1 即表示全局挂载（所有进程）。
+        """
         if self._bpf is None:
             return False
-        pid = self.target_pid if self.target_pid else -1
+        if pid_override is not None:
+            pid = pid_override
+        else:
+            pid = self.target_pid if self.target_pid else -1
         try:
             self._bpf.attach_perf_event_raw(attr=attr, fn_name=fn_name.encode(), pid=pid)
             print(f"[probe] {label} sample_period={attr.sample_period}", flush=True)
@@ -235,7 +299,9 @@ class Collector:
     def _attach_perf_event_group(
         self,
         events: list[tuple[Any, str, str]],
-    ) -> None:
+        inherit: bool = False,
+        fallback_to_independent: bool = True,
+    ) -> bool:
         """Attach a list of perf events as a single PMU group.
 
         ``events[0]`` is the group **leader**; it is opened with
@@ -248,10 +314,22 @@ class Collector:
         ratios (e.g. LLC-miss-rate = misses / accesses) when the PMU
         multiplexes more events than there are hardware counters.
 
-        On any failure the method falls back to independent attachment.
+        inherit=True: 为所有 attr 设置 inherit 位，使内核将事件继承给子进程。
+            注意：LBR（PERF_SAMPLE_BRANCH_STACK）不支持 inherit，只应用于
+            LLC / dTLB / iTLB 这类 PMU 计数器事件组。
+
+        fallback_to_independent=False: 当 leader 绑定失败时不做独立降级，
+            直接返回 False，由调用方决定 fallback 策略。
+
+        Returns True if the leader was successfully attached (members may
+        have partially failed), False if the leader itself failed.
         """
         if self._bpf is None or not events:
-            return
+            return False
+
+        if inherit:
+            for attr, _, _ in events:
+                attr.flags = getattr(attr, "flags", 0) | _PERF_ATTR_FLAG_INHERIT
 
         from bcc import BPF
         from bcc.utils import get_online_cpus
@@ -271,12 +349,13 @@ class Collector:
         except Exception as exc:
             print(
                 f"[警告] {l_label} (grp-leader) 绑定失败 ({exc})，"
-                f"降级为独立模式",
+                f"{'降级为独立模式' if fallback_to_independent else '跳过'}",
                 flush=True,
             )
-            for attr, fn, label in events:
-                self._attach_raw_event(attr, fn, label)
-            return
+            if fallback_to_independent:
+                for attr, fn, label in events:
+                    self._attach_raw_event(attr, fn, label)
+            return False
 
         # ── 2. Retrieve per-CPU leader fds ──────────────────────────────
         #  attach_perf_event_raw stores {cpu: efd} in
@@ -325,6 +404,8 @@ class Collector:
             else:
                 print(f"[警告] {f_label}: 全部 CPU 绑定失败，已跳过", flush=True)
 
+        return True
+
     def _open_event_stream(self) -> None:
         if self._bpf is None or not self.emit_events or self._events_open:
             return
@@ -371,7 +452,7 @@ class Collector:
                 "  或参考: https://github.com/iovisor/bcc/blob/master/INSTALL.md"
             )
 
-        src = _BCC_PROG_PATH.read_text()
+        src = _expand_bcc_source(_BCC_PROG_PATH)
         src_dir = str(_BCC_PROG_PATH.parent)
         self._bpf = BPF(text=src, cflags=[f"-I{src_dir}"])
         bpf = self._bpf
@@ -382,6 +463,11 @@ class Collector:
         if self.target_tid:
             target_tid_map = bpf["target_tid_map"]
             target_tid_map[target_tid_map.Key(0)] = target_tid_map.Leaf(self.target_tid)
+        if self.target_comm:
+            target_comm_map = bpf["target_comm_map"]
+            comm_filter = _TaskCommFilterCtype()
+            comm_filter.comm = self.target_comm.encode("utf-8", errors="ignore")[:15]
+            target_comm_map[target_comm_map.Key(0)] = comm_filter
         if self.per_tid:
             per_tid_map = bpf["per_tid_map"]
             per_tid_map[per_tid_map.Key(0)] = per_tid_map.Leaf(1)
@@ -391,11 +477,8 @@ class Collector:
             self._open_event_stream()
 
         if self.enable_llc:
-            # PMU group: all four LLC counters are scheduled together.
-            # The group leader (LLC load) fires the sample; every member
-            # shares the same enable/disable window, so LLC-miss-rate
-            # ratios are computed from counts measured over identical PMU
-            # time slices — no multiplexing skew.
+            # ── LLC read group: load (leader) + load miss (member) ──────
+            # These events are universally supported for sampling.
             self._attach_perf_event_group([
                 (                                                   # ── leader
                     self._make_attr(
@@ -423,7 +506,15 @@ class Collector:
                     "on_llc_load_miss",
                     "LLC load miss",
                 ),
-                (                                                   # ── member
+            ], inherit=self.track_children)
+
+            # ── LLC write group: store + store miss ──────────────────────
+            # Some CPUs (e.g. Intel Skylake) don't support LL-write as a
+            # perf sampling source.  We try the native HW_CACHE events
+            # first; if the leader itself fails (EINVAL), fall back to
+            # generic HARDWARE CACHE_REFERENCES / CACHE_MISSES events.
+            write_ok = self._attach_perf_event_group([
+                (                                                   # ── leader
                     self._make_attr(
                         Perf.PERF_TYPE_HW_CACHE,
                         _cache_config(
@@ -449,7 +540,48 @@ class Collector:
                     "on_llc_store_miss",
                     "LLC store miss",
                 ),
-            ])
+            ], inherit=self.track_children, fallback_to_independent=False)
+
+            if not write_ok:
+                # Native LLC write sampling unsupported; use generic
+                # CACHE_REFERENCES (all LLC accesses) and CACHE_MISSES
+                # (all LLC misses) as proxy events.
+                print(
+                    "[info] LLC write 采样不受硬件支持，"
+                    "降级为 generic cache-references / cache-misses",
+                    flush=True,
+                )
+                self._attach_perf_event_group([
+                    (                                               # ── leader
+                        self._make_attr(
+                            Perf.PERF_TYPE_HARDWARE,
+                            _PERF_COUNT_HW_CACHE_REFERENCES,
+                            self.sample_rate,
+                        ),
+                        "on_llc_store",
+                        "cache-references [LLC store proxy]",
+                    ),
+                    (                                               # ── member
+                        self._make_attr(
+                            Perf.PERF_TYPE_HARDWARE,
+                            _PERF_COUNT_HW_CACHE_MISSES,
+                            self.sample_rate,
+                        ),
+                        "on_llc_store_miss",
+                        "cache-misses [LLC store miss proxy]",
+                    ),
+                ], inherit=self.track_children)
+                # Rebuild observations to reflect the proxy events used.
+                self._observations = build_default_observations(
+                    sample_rate=self.sample_rate,
+                    enable_llc=self.enable_llc,
+                    enable_dtlb=self.enable_dtlb,
+                    enable_itlb=self.enable_itlb,
+                    enable_fault=self.enable_fault,
+                    enable_lbr=self.enable_lbr,
+                    scope="per_tid" if self.per_tid else "per_pid",
+                    llc_store_via_generic=True,
+                )
 
         if self.enable_dtlb:
             # PMU hardware typically provides 4 programmable counters.
@@ -509,7 +641,7 @@ class Collector:
                     "on_dtlb_store_miss",
                     "dTLB store miss",
                 ),
-            ])
+            ], inherit=self.track_children)
 
         if self.enable_itlb:
             # ── iTLB PMU group (2 events) ───────────────────────────────
@@ -540,12 +672,17 @@ class Collector:
                     "on_itlb_load_miss",
                     "iTLB load miss",
                 ),
-            ])
+            ], inherit=self.track_children)
 
         if self.enable_lbr:
             # LBR requires a unique sample_type/branch_sample_type combination
             # and cannot be grouped with cache events (different perf_event
             # driver domains).  It is attached independently.
+            #
+            # 硬件限制：内核明确拒绝 PERF_SAMPLE_BRANCH_STACK + inherit=1 的组合。
+            # 当 track_children=True 时，改用 pid=-1（全局挂载），
+            # 依赖 eBPF task_allowed() + child_pid_set 在内核层过滤子代。
+            lbr_pid = -1 if self.track_children else None
             self._attach_raw_event(
                 self._make_attr(
                     Perf.PERF_TYPE_HARDWARE,
@@ -553,14 +690,23 @@ class Collector:
                     self.sample_rate,
                     sample_type=_PERF_SAMPLE_BRANCH_STACK,
                     branch_sample_type=_PERF_SAMPLE_BRANCH_USER | _PERF_SAMPLE_BRANCH_ANY,
+                    # inherit 配置此处故意不开启：硬件不支持。
                 ),
                 "on_lbr_sample",
                 "LBR branch stack",
+                pid_override=lbr_pid,
             )
+            if self.track_children:
+                print("[probe] LBR 全局挂载（pid=-1），依赖 eBPF child_pid_set 过滤子进程",
+                      flush=True)
 
         if self.enable_fault:
             bpf.attach_kprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault")
             print("[probe] handle_mm_fault kprobe", flush=True)
+
+        if self.track_children:
+            print(f"[info] track_children 已开启，启动子进程监控线程", flush=True)
+            self._start_child_monitor()
 
     def describe_observations(self) -> list[dict]:
         return list(self._observations)
@@ -648,8 +794,105 @@ class Collector:
             self._pending_events = []
         return snap
 
+    def _start_child_monitor(self) -> None:
+        """启动后台线程，轮询 /proc 发现根进程的子进程/线程，维护 child_pid_set。"""
+        self._child_monitor_stop = threading.Event()
+        self._child_monitor_thread = threading.Thread(
+            target=self._child_monitor_loop,
+            daemon=True,
+            name="bcc-child-monitor",
+        )
+        self._child_monitor_thread.start()
+
+    def _stop_child_monitor(self) -> None:
+        if self._child_monitor_stop is not None:
+            self._child_monitor_stop.set()
+        if self._child_monitor_thread is not None:
+            self._child_monitor_thread.join(timeout=2.0)
+            self._child_monitor_thread = None
+        self._child_monitor_stop = None
+
+    def _child_monitor_loop(self) -> None:
+        assert self._child_monitor_stop is not None
+        while not self._child_monitor_stop.wait(timeout=0.5):
+            try:
+                self._refresh_child_pids()
+            except Exception as exc:
+                print(f"[child-monitor] 异常: {exc}", file=sys.stderr, flush=True)
+
+    def _refresh_child_pids(self) -> None:
+        """扫描 /proc 找出根进程的线程和直接子进程，同步到 child_pid_set BPF map。"""
+        if self._bpf is None:
+            return
+
+        live: set[int] = set()
+
+        # 1. 根进程的所有线程（/proc/<target_pid>/task/）
+        task_dir = pathlib.Path(f"/proc/{self.target_pid}/task")
+        try:
+            for entry in task_dir.iterdir():
+                if entry.name.isdigit():
+                    live.add(int(entry.name))
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            pass  # 根进程已退出
+
+        # 2. 直接子进程（ppid == target_pid）及其线程
+        for entry in pathlib.Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                status_text = (entry / "status").read_text()
+            except (FileNotFoundError, PermissionError):
+                continue
+            try:
+                ppid = next(
+                    int(line.split()[1])
+                    for line in status_text.splitlines()
+                    if line.startswith("PPid:")
+                )
+            except StopIteration:
+                continue
+            if ppid != self.target_pid:
+                continue
+            child_pid = int(entry.name)
+            live.add(child_pid)
+            # 子进程自身的线程
+            child_task = entry / "task"
+            try:
+                for t in child_task.iterdir():
+                    if t.name.isdigit():
+                        live.add(int(t.name))
+            except (FileNotFoundError, PermissionError):
+                pass
+
+        # target_pid 本身由 target_pid_map 覆盖，child_pid_set 只存子代
+        live.discard(self.target_pid)
+
+        with self._child_monitor_lock:
+            prev = self._tracked_child_pids
+        new_pids  = live - prev
+        gone_pids = prev - live
+
+        child_map = self._bpf["child_pid_set"]
+        for pid in new_pids:
+            try:
+                child_map[child_map.Key(pid)] = child_map.Leaf(1)
+                print(f"[child-monitor] +PID {pid}", flush=True)
+            except Exception as exc:
+                print(f"[child-monitor] 添加 PID {pid} 失败: {exc}",
+                      file=sys.stderr, flush=True)
+        for pid in gone_pids:
+            try:
+                del child_map[child_map.Key(pid)]
+            except Exception:
+                pass
+
+        with self._child_monitor_lock:
+            self._tracked_child_pids = (prev | new_pids) - gone_pids
+
     def stop(self) -> None:
         """卸载 eBPF 程序并释放资源。"""
+        self._stop_child_monitor()
         if self._bpf is not None:
             self._poll_events()
             self._bpf.cleanup()

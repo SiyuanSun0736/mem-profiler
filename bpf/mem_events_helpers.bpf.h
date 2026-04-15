@@ -20,8 +20,18 @@ static __always_inline struct collector_config *cfg_get(void)
 static __always_inline bool pid_allowed(__u32 pid, __u32 tid,
                                         const struct collector_config *cfg)
 {
-    if (cfg->target_pid != 0 && cfg->target_pid != pid)
-        return false;
+    if (cfg->target_pid != 0 && cfg->target_pid != pid) {
+        /*
+         * PID 不匹配根进程 — 若已开启子进程追踪，
+         * 检查 child_pid_set：Python 后台线程将已知子代 PID 写入此 map，
+         * 命中则放行，未命中则丢弃。
+         */
+        if (!cfg->track_children)
+            return false;
+        __u8 *in_set = bpf_map_lookup_elem(&child_pid_set, &pid);
+        if (!in_set)
+            return false;
+    }
     if (cfg->target_tid != 0 && cfg->target_tid != tid)
         return false;
     return true;

@@ -11,7 +11,7 @@ int on_page_fault(struct pt_regs *ctx,
                   unsigned long address,
                   unsigned int flags)
 {
-    BCC_PROLOGUEUE();
+    BCC_PROLOGUE();
 
     /* FAULT_FLAG_MAJOR = 0x400 */
     bool is_major = (flags & 0x400) != 0;
