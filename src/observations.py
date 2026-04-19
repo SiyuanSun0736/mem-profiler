@@ -71,6 +71,38 @@ def build_default_observations(
 ) -> list[dict]:
     observations: list[ObservationSpec] = []
 
+    # cycles + instructions 是基础硬件计数器，始终采集，无开关
+    observations.extend([
+        ObservationSpec(
+            observation_id="pmu_cycles",
+            kind="pmu_sampling",
+            backend="bcc_perf_event_raw",
+            metrics=["cycles"],
+            scope=scope,
+            sample_period=sample_rate,
+            perf_type="hardware",
+            perf_config="cpu_cycles",
+            group_id="pmu_hw_base",
+            group_role="leader",
+            multiplex_mode="opaque_backend",
+            notes="Accumulated via ctx->sample_period per handler invocation.",
+        ),
+        ObservationSpec(
+            observation_id="pmu_instructions",
+            kind="pmu_sampling",
+            backend="bcc_perf_event_raw",
+            metrics=["instructions"],
+            scope=scope,
+            sample_period=sample_rate,
+            perf_type="hardware",
+            perf_config="instructions",
+            group_id="pmu_hw_base",
+            group_role="member",
+            multiplex_mode="opaque_backend",
+            notes="Accumulated via ctx->sample_period per handler invocation.",
+        ),
+    ])
+
     if enable_llc:
         observations.extend([
             ObservationSpec(
@@ -191,19 +223,7 @@ def build_default_observations(
         ])
 
     if enable_itlb:
-        observations.extend([
-            ObservationSpec(
-                observation_id="pmu_itlb_load",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["itlb_loads", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
-                perf_type="hw_cache",
-                perf_config="itlb.read.access",
-                group_id="pmu_itlb",
-                multiplex_mode="opaque_backend",
-            ),
+        observations.append(
             ObservationSpec(
                 observation_id="pmu_itlb_load_miss",
                 kind="pmu_sampling",
@@ -213,10 +233,10 @@ def build_default_observations(
                 sample_period=sample_rate,
                 perf_type="hw_cache",
                 perf_config="itlb.read.miss",
-                group_id="pmu_itlb",
                 multiplex_mode="opaque_backend",
-            ),
-        ])
+                notes="Attached as independent event; itlb.read.access is not supported on this CPU.",
+            )
+        )
 
     if enable_fault:
         observations.append(

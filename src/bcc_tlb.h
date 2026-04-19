@@ -49,14 +49,6 @@ int on_dtlb_store_miss(struct bpf_perf_event_data *ctx)
 /* iTLB                                                                 */
 /* ------------------------------------------------------------------ */
 
-int on_itlb_load(struct bpf_perf_event_data *ctx)
-{
-    BCC_PROLOGUE();
-    s->itlb_loads++;
-    touch_stats(s);
-    return 0;
-}
-
 int on_itlb_load_miss(struct bpf_perf_event_data *ctx)
 {
     BCC_PROLOGUE();

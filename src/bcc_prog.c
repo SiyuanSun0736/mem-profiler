@@ -23,6 +23,7 @@
 #include "bcc_types.h"
 #include "bcc_maps.h"
 #include "bcc_helpers.h"
+#include "bcc_pmu.h"
 #include "bcc_llc.h"
 #include "bcc_tlb.h"
 #include "bcc_lbr.h"

@@ -256,17 +256,21 @@ git submodule update --init --recursive
 bash experiments/llvm_test_suite/extract_elf.sh -n
 
 # 正式提取
-bash experiments/llvm_test_suite/extract_elf.sh -b build-O1-g -v O1-g
+bash experiments/llvm_test_suite/extract_elf.sh -b build-O1 -v O1
 
-# 基于提取结果执行 PMU 采集
+# 基于提取结果执行单个 VARIANT 的 BCC 采集（默认 VARIANT=O3）
 sudo bash experiments/llvm_test_suite/collect_dataset_testbench.sh
+
+# 一次顺序采集 data/llvm_test_suite 下全部 VARIANT（自动检测 O0/O1/O2/O3）
+sudo bash experiments/llvm_test_suite/collect_dataset_all_variants.sh
 ```
 
 默认输出：
 - `data/llvm_test_suite/bin/<VARIANT>`：提取的 ELF
 - `data/llvm_test_suite/test/<VARIANT>`：对应 .test 与运行时文件
-- `data/llvm_test_suite/pmu/<VARIANT>`：PMU CSV
-- `results/llvm_test_suite/log/`：脚本与 pmu_monitor 运行日志
+- `data/llvm_test_suite/bcc/<VARIANT>/<bench>_<timestamp>/`：BCC JSONL 采集结果
+- `data/llvm_test_suite/manifest_bcc_<VARIANT>.jsonl`：批量采集清单
+- `results/llvm_test_suite/log/`：批量脚本运行日志
 
 ---
 

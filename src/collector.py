@@ -24,6 +24,8 @@ from observations import build_default_observations
 
 _BCC_PROG_PATH = pathlib.Path(__file__).parent / "bcc_prog.c"
 _MAX_LBR_ENTRIES = 8
+_STALE_ENTITY_WINDOW_MULTIPLIER = 5.0
+_MIN_STALE_ENTITY_TIMEOUT_NS = 1_000_000_000
 
 
 def _expand_bcc_source(src_path: pathlib.Path) -> str:
@@ -58,6 +60,8 @@ _PERF_COUNT_HW_CACHE_OP_READ = 0
 _PERF_COUNT_HW_CACHE_OP_WRITE = 1
 _PERF_COUNT_HW_CACHE_RESULT_ACCESS = 0
 _PERF_COUNT_HW_CACHE_RESULT_MISS = 1
+_PERF_COUNT_HW_CPU_CYCLES = 0          # PERF_TYPE_HARDWARE CPU cycles
+_PERF_COUNT_HW_INSTRUCTIONS = 1        # PERF_TYPE_HARDWARE retired instructions
 _PERF_COUNT_HW_BRANCH_INSTRUCTIONS = 4
 _PERF_COUNT_HW_CACHE_REFERENCES = 4   # PERF_TYPE_HARDWARE generic cache references
 _PERF_COUNT_HW_CACHE_MISSES = 5       # PERF_TYPE_HARDWARE generic cache misses
@@ -92,8 +96,9 @@ class _PidMemStatsCtype(ctypes.Structure):
         ("dtlb_stores", ctypes.c_uint64),
         ("dtlb_store_misses", ctypes.c_uint64),
         ("dtlb_misses", ctypes.c_uint64),
-        ("itlb_loads", ctypes.c_uint64),
         ("itlb_load_misses", ctypes.c_uint64),
+        ("cycles", ctypes.c_uint64),
+        ("instructions", ctypes.c_uint64),
         ("minor_faults", ctypes.c_uint64),
         ("major_faults", ctypes.c_uint64),
         ("lbr_samples", ctypes.c_uint64),
@@ -146,13 +151,15 @@ class PidStats:
     dtlb_stores: int = 0
     dtlb_store_misses: int = 0
     dtlb_misses: int = 0
-    itlb_loads: int = 0
     itlb_load_misses: int = 0
+    cycles: int = 0
+    instructions: int = 0
     minor_faults: int = 0
     major_faults: int = 0
     lbr_samples: int = 0
     lbr_entries: int = 0
     samples: int = 0
+    last_seen_ns: int = 0
 
 
 @dataclass
@@ -165,7 +172,35 @@ class WindowSnapshot:
     entries: list[dict] = field(default_factory=list)
     events: list[dict] = field(default_factory=list)
 
+    @staticmethod
+    def _is_zero_delta(delta: "PidStats") -> bool:
+        return all(
+            value == 0
+            for value in (
+                delta.llc_loads,
+                delta.llc_load_misses,
+                delta.llc_stores,
+                delta.llc_store_misses,
+                delta.dtlb_loads,
+                delta.dtlb_load_misses,
+                delta.dtlb_stores,
+                delta.dtlb_store_misses,
+                delta.dtlb_misses,
+                delta.itlb_load_misses,
+                delta.cycles,
+                delta.instructions,
+                delta.minor_faults,
+                delta.major_faults,
+                delta.lbr_samples,
+                delta.lbr_entries,
+                delta.samples,
+            )
+        )
+
     def add(self, delta: "PidStats") -> None:
+        if self._is_zero_delta(delta):
+            return
+
         row = {
             "window_id": self.window_id,
             "start_ns": self.start_ns,
@@ -182,8 +217,9 @@ class WindowSnapshot:
             "dtlb_stores": delta.dtlb_stores,
             "dtlb_store_misses": delta.dtlb_store_misses,
             "dtlb_misses": delta.dtlb_misses,
-            "itlb_loads": delta.itlb_loads,
             "itlb_load_misses": delta.itlb_load_misses,
+            "cycles": delta.cycles,
+            "instructions": delta.instructions,
             "minor_faults": delta.minor_faults,
             "major_faults": delta.major_faults,
             "lbr_samples": delta.lbr_samples,
@@ -237,6 +273,10 @@ class Collector:
             enable_fault=enable_fault,
             enable_lbr=enable_lbr,
             scope="per_tid" if self.per_tid else "per_pid",
+        )
+        self._stale_entity_timeout_ns = max(
+            int(self.window_sec * _STALE_ENTITY_WINDOW_MULTIPLIER * 1e9),
+            _MIN_STALE_ENTITY_TIMEOUT_NS,
         )
 
         self._bpf: Optional[Any] = None
@@ -373,7 +413,7 @@ class Collector:
             )
             for attr, fn, label in events[1:]:
                 self._attach_raw_event(attr, fn, label)
-            return
+            return True
 
         # ── 3. Attach each group member per CPU ─────────────────────────
         for f_attr, f_fn, f_label in events[1:]:
@@ -475,6 +515,31 @@ class Collector:
             emit_events_map = bpf["emit_events_map"]
             emit_events_map[emit_events_map.Key(0)] = emit_events_map.Leaf(1)
             self._open_event_stream()
+
+        # ── cycles + instructions group ─────────────────────────────────
+        # These are fundamental hardware counters used to derive IPC and
+        # MPKI.  Grouped so the kernel keeps them co-scheduled and their
+        # ratio remains meaningful under PMU multiplexing.
+        self._attach_perf_event_group([
+            (                                                       # ── leader
+                self._make_attr(
+                    Perf.PERF_TYPE_HARDWARE,
+                    _PERF_COUNT_HW_CPU_CYCLES,
+                    self.sample_rate,
+                ),
+                "on_cycles",
+                "CPU cycles",
+            ),
+            (                                                       # ── member
+                self._make_attr(
+                    Perf.PERF_TYPE_HARDWARE,
+                    _PERF_COUNT_HW_INSTRUCTIONS,
+                    self.sample_rate,
+                ),
+                "on_instructions",
+                "hardware instructions",
+            ),
+        ], inherit=self.track_children)
 
         if self.enable_llc:
             # ── LLC read group: load (leader) + load miss (member) ──────
@@ -644,35 +709,24 @@ class Collector:
             ], inherit=self.track_children)
 
         if self.enable_itlb:
-            # ── iTLB PMU group (2 events) ───────────────────────────────
-            self._attach_perf_event_group([
-                (                                                   # ── leader
-                    self._make_attr(
-                        Perf.PERF_TYPE_HW_CACHE,
-                        _cache_config(
-                            _PERF_COUNT_HW_CACHE_ITLB,
-                            _PERF_COUNT_HW_CACHE_OP_READ,
-                            _PERF_COUNT_HW_CACHE_RESULT_ACCESS,
-                        ),
-                        self.sample_rate,
+            # ── iTLB load miss (independent event) ─────────────────────
+            # iTLB load access (HW_CACHE_RESULT_ACCESS) is not supported
+            # on many Intel processors.  Attach only the miss counter as
+            # an independent event so it is never blocked by a failing
+            # group leader.
+            self._attach_raw_event(
+                self._make_attr(
+                    Perf.PERF_TYPE_HW_CACHE,
+                    _cache_config(
+                        _PERF_COUNT_HW_CACHE_ITLB,
+                        _PERF_COUNT_HW_CACHE_OP_READ,
+                        _PERF_COUNT_HW_CACHE_RESULT_MISS,
                     ),
-                    "on_itlb_load",
-                    "iTLB load",
+                    self.sample_rate,
                 ),
-                (                                                   # ── member
-                    self._make_attr(
-                        Perf.PERF_TYPE_HW_CACHE,
-                        _cache_config(
-                            _PERF_COUNT_HW_CACHE_ITLB,
-                            _PERF_COUNT_HW_CACHE_OP_READ,
-                            _PERF_COUNT_HW_CACHE_RESULT_MISS,
-                        ),
-                        self.sample_rate,
-                    ),
-                    "on_itlb_load_miss",
-                    "iTLB load miss",
-                ),
-            ], inherit=self.track_children)
+                "on_itlb_load_miss",
+                "iTLB load miss",
+            )
 
         if self.enable_lbr:
             # LBR requires a unique sample_type/branch_sample_type combination
@@ -711,6 +765,34 @@ class Collector:
     def describe_observations(self) -> list[dict]:
         return list(self._observations)
 
+    def _prune_stale_entities(
+        self,
+        raw_map: Any,
+        current: dict[tuple[int, int], PidStats],
+        now_ns: int,
+    ) -> None:
+        stale_before_ns = now_ns - self._stale_entity_timeout_ns
+        stale_keys = [
+            entity_key
+            for entity_key, stats in current.items()
+            if stats.last_seen_ns > 0 and stats.last_seen_ns <= stale_before_ns
+        ]
+
+        if not stale_keys:
+            return
+
+        for pid, tid in stale_keys:
+            current.pop((pid, tid), None)
+            self._prev.pop((pid, tid), None)
+            try:
+                del raw_map[raw_map.Key(pid=pid, tid=tid)]
+            except Exception as exc:
+                print(
+                    f"[警告] 清理陈旧 pid_stats 条目失败: pid={pid} tid={tid} ({exc})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
     def drain_window(self, window_id: int) -> WindowSnapshot:
         """读取 pid_stats 快照并返回一个时间窗结果。"""
         self._poll_events()
@@ -745,13 +827,15 @@ class Collector:
                     agg.dtlb_stores += int(cv.dtlb_stores)
                     agg.dtlb_store_misses += int(cv.dtlb_store_misses)
                     agg.dtlb_misses += int(cv.dtlb_misses)
-                    agg.itlb_loads += int(cv.itlb_loads)
                     agg.itlb_load_misses += int(cv.itlb_load_misses)
+                    agg.cycles += int(cv.cycles)
+                    agg.instructions += int(cv.instructions)
                     agg.minor_faults += int(cv.minor_faults)
                     agg.major_faults += int(cv.major_faults)
                     agg.lbr_samples += int(cv.lbr_samples)
                     agg.lbr_entries += int(cv.lbr_entries)
                     agg.samples += int(cv.samples)
+                    agg.last_seen_ns = max(agg.last_seen_ns, int(cv.last_seen_ns))
                     if cv.comm and not agg.comm:
                         agg.comm = _decode_comm(cv.comm)
 
@@ -775,8 +859,9 @@ class Collector:
                         dtlb_stores=max(0, agg.dtlb_stores - prev.dtlb_stores),
                         dtlb_store_misses=max(0, agg.dtlb_store_misses - prev.dtlb_store_misses),
                         dtlb_misses=max(0, agg.dtlb_misses - prev.dtlb_misses),
-                        itlb_loads=max(0, agg.itlb_loads - prev.itlb_loads),
                         itlb_load_misses=max(0, agg.itlb_load_misses - prev.itlb_load_misses),
+                        cycles=max(0, agg.cycles - prev.cycles),
+                        instructions=max(0, agg.instructions - prev.instructions),
                         minor_faults=max(0, agg.minor_faults - prev.minor_faults),
                         major_faults=max(0, agg.major_faults - prev.major_faults),
                         lbr_samples=max(0, agg.lbr_samples - prev.lbr_samples),
@@ -788,6 +873,7 @@ class Collector:
         except Exception as exc:
             print(f"[警告] 读取 pid_stats 失败: {exc}", file=sys.stderr, flush=True)
 
+        self._prune_stale_entities(raw_map, current, now_ns)
         self._prev = current
         if self._pending_events:
             snap.events.extend(self._pending_events)

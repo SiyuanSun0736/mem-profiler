@@ -48,7 +48,7 @@ DATASET_ROOT="${DATASET_ROOT:-$PROJECT_ROOT/data/llvm_test_suite}"
 # ── 默认参数 ──────────────────────────────────────────────────────────────────
 VERSION="O3-g"
 BUILD_DIR=""       # 依赖 VERSION，在 getopts 后填充
-MS_SUBDIR="Applications"
+MS_SUBDIR="Benchmarks"
 # MultiSource 目录名（允许用户修改，例如 "MultiSource" 或 "MultiSource-custom"）
 MULTI_DIR="MultiSource"
 OUT_DIR=""         # 依赖 VERSION，在 getopts 后填充

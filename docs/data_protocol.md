@@ -113,8 +113,9 @@ data/run_001/
 | `dtlb_stores` | integer ≥ 0 | 本窗口 dTLB store access 采样计数 |
 | `dtlb_store_misses` | integer ≥ 0 | 本窗口 dTLB store miss 采样计数 |
 | `dtlb_misses` | integer ≥ 0 | 本窗口 dTLB load miss 采样计数 |
-| `itlb_loads` | integer ≥ 0 | 本窗口 iTLB load access 采样计数 |
 | `itlb_load_misses` | integer ≥ 0 | 本窗口 iTLB load miss 采样计数 |
+| `cycles` | integer ≥ 0 | 本窗口 CPU cycles 近似计数（sample_period 累加） |
+| `instructions` | integer ≥ 0 | 本窗口 retired instructions 近似计数（sample_period 累加） |
 | `minor_faults` | integer ≥ 0 | 本窗口 minor page fault 次数 |
 | `major_faults` | integer ≥ 0 | 本窗口 major page fault 次数 |
 | `lbr_samples` | integer ≥ 0 | 本窗口 LBR 分支栈样本数 |

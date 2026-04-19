@@ -54,8 +54,9 @@ struct pid_mem_stats_t {
     u64 dtlb_stores;
     u64 dtlb_store_misses;
     u64 dtlb_misses;
-    u64 itlb_loads;
     u64 itlb_load_misses;
+    u64 cycles;
+    u64 instructions;
     u64 minor_faults;
     u64 major_faults;
     u64 lbr_samples;
