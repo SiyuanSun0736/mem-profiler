@@ -69,6 +69,36 @@ _PERF_COUNT_HW_CACHE_MISSES = 5       # PERF_TYPE_HARDWARE generic cache misses
 _PERF_SAMPLE_BRANCH_STACK = 1 << 11
 _PERF_SAMPLE_BRANCH_USER = 1 << 0
 _PERF_SAMPLE_BRANCH_ANY = 1 << 3
+_SYSCALL_PREFIXES = [
+    b"sys_",
+    b"__x64_sys_",
+    b"__x32_compat_sys_",
+    b"__ia32_compat_sys_",
+    b"__arm64_sys_",
+    b"__s390x_sys_",
+    b"__s390_sys_",
+    b"__riscv_sys_",
+]
+
+_EVENT_TYPE_NAMES = {
+    1: "llc_load_miss",
+    2: "llc_store_miss",
+    3: "dtlb_miss",
+    4: "minor_fault",
+    5: "major_fault",
+    6: "lbr_sample",
+    7: "mmap",
+    8: "munmap",
+    9: "mprotect",
+    10: "brk",
+}
+
+_MEM_CLASS_ANON = 1 << 0
+_MEM_CLASS_FILE = 1 << 1
+_MEM_CLASS_SHARED = 1 << 2
+_MEM_CLASS_PRIVATE = 1 << 3
+_MEM_CLASS_WRITE = 1 << 4
+_MEM_CLASS_EXEC = 1 << 5
 
 
 def _cache_config(cache: int, op: int, result: int) -> int:
@@ -102,6 +132,21 @@ class _PidMemStatsCtype(ctypes.Structure):
         ("instructions", ctypes.c_uint64),
         ("minor_faults", ctypes.c_uint64),
         ("major_faults", ctypes.c_uint64),
+        ("anon_faults", ctypes.c_uint64),
+        ("file_faults", ctypes.c_uint64),
+        ("shared_faults", ctypes.c_uint64),
+        ("private_faults", ctypes.c_uint64),
+        ("write_faults", ctypes.c_uint64),
+        ("instruction_faults", ctypes.c_uint64),
+        ("mmap_calls", ctypes.c_uint64),
+        ("munmap_calls", ctypes.c_uint64),
+        ("mprotect_calls", ctypes.c_uint64),
+        ("brk_calls", ctypes.c_uint64),
+        ("mmap_bytes", ctypes.c_uint64),
+        ("munmap_bytes", ctypes.c_uint64),
+        ("mprotect_bytes", ctypes.c_uint64),
+        ("brk_growth_bytes", ctypes.c_uint64),
+        ("brk_shrink_bytes", ctypes.c_uint64),
         ("lbr_samples", ctypes.c_uint64),
         ("lbr_entries", ctypes.c_uint64),
         ("samples", ctypes.c_uint64),
@@ -127,9 +172,16 @@ class _MemEventCtype(ctypes.Structure):
         ("event_type", ctypes.c_uint8),
         ("lbr_nr", ctypes.c_uint8),
         ("_pad0", ctypes.c_uint16),
+        ("prot", ctypes.c_uint32),
+        ("event_flags", ctypes.c_uint32),
+        ("class_flags", ctypes.c_uint32),
         ("_pad1", ctypes.c_uint32),
         ("addr", ctypes.c_uint64),
         ("ip", ctypes.c_uint64),
+        ("length", ctypes.c_uint64),
+        ("requested_addr", ctypes.c_uint64),
+        ("vma_flags", ctypes.c_uint64),
+        ("delta_bytes", ctypes.c_int64),
         ("lbr", _LbrEntryCtype * _MAX_LBR_ENTRIES),
     ]
 
@@ -157,6 +209,21 @@ class PidStats:
     instructions: int = 0
     minor_faults: int = 0
     major_faults: int = 0
+    anon_faults: int = 0
+    file_faults: int = 0
+    shared_faults: int = 0
+    private_faults: int = 0
+    write_faults: int = 0
+    instruction_faults: int = 0
+    mmap_calls: int = 0
+    munmap_calls: int = 0
+    mprotect_calls: int = 0
+    brk_calls: int = 0
+    mmap_bytes: int = 0
+    munmap_bytes: int = 0
+    mprotect_bytes: int = 0
+    brk_growth_bytes: int = 0
+    brk_shrink_bytes: int = 0
     lbr_samples: int = 0
     lbr_entries: int = 0
     samples: int = 0
@@ -192,6 +259,21 @@ class WindowSnapshot:
                 delta.instructions,
                 delta.minor_faults,
                 delta.major_faults,
+                delta.anon_faults,
+                delta.file_faults,
+                delta.shared_faults,
+                delta.private_faults,
+                delta.write_faults,
+                delta.instruction_faults,
+                delta.mmap_calls,
+                delta.munmap_calls,
+                delta.mprotect_calls,
+                delta.brk_calls,
+                delta.mmap_bytes,
+                delta.munmap_bytes,
+                delta.mprotect_bytes,
+                delta.brk_growth_bytes,
+                delta.brk_shrink_bytes,
                 delta.lbr_samples,
                 delta.lbr_entries,
                 delta.samples,
@@ -223,6 +305,21 @@ class WindowSnapshot:
             "instructions": delta.instructions,
             "minor_faults": delta.minor_faults,
             "major_faults": delta.major_faults,
+            "anon_faults": delta.anon_faults,
+            "file_faults": delta.file_faults,
+            "shared_faults": delta.shared_faults,
+            "private_faults": delta.private_faults,
+            "write_faults": delta.write_faults,
+            "instruction_faults": delta.instruction_faults,
+            "mmap_calls": delta.mmap_calls,
+            "munmap_calls": delta.munmap_calls,
+            "mprotect_calls": delta.mprotect_calls,
+            "brk_calls": delta.brk_calls,
+            "mmap_bytes": delta.mmap_bytes,
+            "munmap_bytes": delta.munmap_bytes,
+            "mprotect_bytes": delta.mprotect_bytes,
+            "brk_growth_bytes": delta.brk_growth_bytes,
+            "brk_shrink_bytes": delta.brk_shrink_bytes,
             "lbr_samples": delta.lbr_samples,
             "lbr_entries": delta.lbr_entries,
             "samples": delta.samples,
@@ -247,7 +344,9 @@ class Collector:
         enable_dtlb: bool = True,
         enable_itlb: bool = True,
         enable_fault: bool = True,
+        enable_fault_classification: bool = True,
         enable_lbr: bool = False,
+        enable_mm_syscalls: bool = True,
         per_tid: bool = False,
         track_children: bool = False,
         pmu_backend: str = "auto",
@@ -262,7 +361,9 @@ class Collector:
         self.enable_dtlb = enable_dtlb
         self.enable_itlb = enable_itlb
         self.enable_fault = enable_fault
+        self.enable_fault_classification = enable_fault_classification
         self.enable_lbr = enable_lbr
+        self.enable_mm_syscalls = enable_mm_syscalls
         self.per_tid = per_tid or target_tid > 0
         self.pmu_backend = pmu_backend
         self._use_bcc_pmu = pmu_backend == "bcc"
@@ -282,6 +383,8 @@ class Collector:
         self._prev: dict[tuple[int, int], PidStats] = {}
         self._pending_events: list[dict] = []
         self._events_open = False
+        self._syscall_prefix: bytes = b"sys_"
+        self._mm_syscall_wrapper = False
         # 子进程追踪（track_children=True 时开启）
         self._tracked_child_pids: set[int] = set()
         self._child_monitor_lock: threading.Lock = threading.Lock()
@@ -295,7 +398,9 @@ class Collector:
             enable_dtlb=self.enable_dtlb,
             enable_itlb=self.enable_itlb,
             enable_fault=self.enable_fault,
+            enable_fault_classification=self.enable_fault_classification,
             enable_lbr=self.enable_lbr,
+            enable_mm_syscalls=self.enable_mm_syscalls,
             scope="per_tid" if self.per_tid else "per_pid",
             llc_store_via_generic=self._llc_store_via_generic,
             pmu_backend="bcc" if self._use_bcc_pmu else "perf_event_open",
@@ -304,9 +409,61 @@ class Collector:
     def describe_collection_backend(self) -> str:
         if self._use_bcc_pmu:
             return "bcc"
-        if self.enable_fault or self.enable_lbr:
+        if self.enable_fault or self.enable_lbr or self.enable_mm_syscalls:
             return "hybrid_perf_event_open_bcc"
         return "perf_event_open"
+
+    def _syscall_fnname(self, name: str) -> bytes:
+        return self._syscall_prefix + name.encode()
+
+    @staticmethod
+    def _is_syscall_wrapper_name(fn_name: bytes) -> bool:
+        name = fn_name.decode(errors="ignore")
+        return name.startswith("__") and "_sys_" in name
+
+    @staticmethod
+    def _detect_syscall_prefix() -> bytes:
+        symbol_to_prefix = {prefix + b"bpf": prefix for prefix in _SYSCALL_PREFIXES}
+        try:
+            with open("/proc/kallsyms", "rb") as handle:
+                for line in handle:
+                    parts = line.split()
+                    if len(parts) < 3:
+                        continue
+                    prefix = symbol_to_prefix.get(parts[2])
+                    if prefix is not None:
+                        return prefix
+        except OSError:
+            pass
+        return _SYSCALL_PREFIXES[0]
+
+    def _attach_mm_syscall_probes(self) -> None:
+        if self._bpf is None:
+            return
+
+        mmap_event = self._syscall_fnname("mmap")
+
+        probe_specs = [
+            (mmap_event, "mmap", "on_mmap_enter", "on_mmap_return"),
+            ("munmap", "munmap", "on_munmap_enter", "on_munmap_return"),
+            ("mprotect", "mprotect", "on_mprotect_enter", "on_mprotect_return"),
+            ("brk", "brk", "on_brk_enter", "on_brk_return"),
+        ]
+
+        for event_or_name, syscall_name, entry_fn, ret_fn in probe_specs:
+            try:
+                if isinstance(event_or_name, bytes):
+                    event = event_or_name
+                else:
+                    event = self._syscall_fnname(event_or_name)
+                self._bpf.attach_kprobe(event=event, fn_name=entry_fn.encode())
+                self._bpf.attach_kretprobe(event=event, fn_name=ret_fn.encode())
+                print(f"[probe] {event.decode(errors='replace')} kprobe+kretprobe", flush=True)
+            except Exception as exc:
+                print(
+                    f"[警告] {syscall_name} syscall 探针绑定失败 ({exc})，已跳过",
+                    flush=True,
+                )
 
     def _make_attr(
         self,
@@ -484,9 +641,31 @@ class Collector:
             "tid": int(ev.tid),
             "comm": _decode_comm(ev.comm),
             "event_type": int(ev.event_type),
+            "event_name": _EVENT_TYPE_NAMES.get(int(ev.event_type), "unknown"),
             "addr": int(ev.addr),
             "ip": int(ev.ip),
         }
+        if ev.length:
+            row["length"] = int(ev.length)
+        if ev.requested_addr:
+            row["requested_addr"] = int(ev.requested_addr)
+        if ev.prot:
+            row["prot"] = int(ev.prot)
+        if ev.event_flags:
+            row["event_flags"] = int(ev.event_flags)
+        if ev.vma_flags:
+            row["vma_flags"] = int(ev.vma_flags)
+        if ev.delta_bytes:
+            row["delta_bytes"] = int(ev.delta_bytes)
+        if ev.class_flags:
+            class_flags = int(ev.class_flags)
+            row["class_flags"] = class_flags
+            row["is_anon"] = bool(class_flags & _MEM_CLASS_ANON)
+            row["is_file_backed"] = bool(class_flags & _MEM_CLASS_FILE)
+            row["is_shared"] = bool(class_flags & _MEM_CLASS_SHARED)
+            row["is_private"] = bool(class_flags & _MEM_CLASS_PRIVATE)
+            row["is_write"] = bool(class_flags & _MEM_CLASS_WRITE)
+            row["is_exec"] = bool(class_flags & _MEM_CLASS_EXEC)
         if ev.lbr_nr:
             row["lbr"] = [
                 {
@@ -513,7 +692,18 @@ class Collector:
 
         src = _expand_bcc_source(_BCC_PROG_PATH)
         src_dir = str(_BCC_PROG_PATH.parent)
-        self._bpf = BPF(text=src, cflags=[f"-I{src_dir}"])
+        if self.enable_mm_syscalls:
+            self._syscall_prefix = self._detect_syscall_prefix()
+            self._mm_syscall_wrapper = self._is_syscall_wrapper_name(
+                self._syscall_prefix + b"mmap"
+            )
+        self._bpf = BPF(
+            text=src,
+            cflags=[
+                f"-I{src_dir}",
+                f"-DMM_SYSCALL_WRAPPER={1 if self._mm_syscall_wrapper else 0}",
+            ],
+        )
         bpf = self._bpf
 
         if self.target_pid:
@@ -534,6 +724,10 @@ class Collector:
             emit_events_map = bpf["emit_events_map"]
             emit_events_map[emit_events_map.Key(0)] = emit_events_map.Leaf(1)
             self._open_event_stream()
+        fault_classification_map = bpf["fault_classification_map"]
+        fault_classification_map[fault_classification_map.Key(0)] = (
+            fault_classification_map.Leaf(1 if self.enable_fault_classification else 0)
+        )
 
         if self.pmu_backend in {"auto", "perf_event_open"}:
             try:
@@ -803,9 +997,13 @@ class Collector:
 
         if self.enable_fault:
             bpf.attach_kprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault")
-            print("[probe] handle_mm_fault kprobe", flush=True)
+            bpf.attach_kretprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault_return")
+            print("[probe] handle_mm_fault kprobe+kretprobe", flush=True)
 
-        if self.track_children and (self.enable_fault or self.enable_lbr):
+        if self.enable_mm_syscalls:
+            self._attach_mm_syscall_probes()
+
+        if self.track_children and (self.enable_fault or self.enable_lbr or self.enable_mm_syscalls):
             print(f"[info] track_children 已开启，启动子进程监控线程", flush=True)
             self._start_child_monitor()
 
@@ -880,6 +1078,21 @@ class Collector:
                         agg.instructions += int(cv.instructions)
                         agg.minor_faults += int(cv.minor_faults)
                         agg.major_faults += int(cv.major_faults)
+                        agg.anon_faults += int(cv.anon_faults)
+                        agg.file_faults += int(cv.file_faults)
+                        agg.shared_faults += int(cv.shared_faults)
+                        agg.private_faults += int(cv.private_faults)
+                        agg.write_faults += int(cv.write_faults)
+                        agg.instruction_faults += int(cv.instruction_faults)
+                        agg.mmap_calls += int(cv.mmap_calls)
+                        agg.munmap_calls += int(cv.munmap_calls)
+                        agg.mprotect_calls += int(cv.mprotect_calls)
+                        agg.brk_calls += int(cv.brk_calls)
+                        agg.mmap_bytes += int(cv.mmap_bytes)
+                        agg.munmap_bytes += int(cv.munmap_bytes)
+                        agg.mprotect_bytes += int(cv.mprotect_bytes)
+                        agg.brk_growth_bytes += int(cv.brk_growth_bytes)
+                        agg.brk_shrink_bytes += int(cv.brk_shrink_bytes)
                         agg.lbr_samples += int(cv.lbr_samples)
                         agg.lbr_entries += int(cv.lbr_entries)
                         agg.samples += int(cv.samples)
@@ -948,6 +1161,21 @@ class Collector:
                     instructions=max(0, agg.instructions - prev.instructions),
                     minor_faults=max(0, agg.minor_faults - prev.minor_faults),
                     major_faults=max(0, agg.major_faults - prev.major_faults),
+                    anon_faults=max(0, agg.anon_faults - prev.anon_faults),
+                    file_faults=max(0, agg.file_faults - prev.file_faults),
+                    shared_faults=max(0, agg.shared_faults - prev.shared_faults),
+                    private_faults=max(0, agg.private_faults - prev.private_faults),
+                    write_faults=max(0, agg.write_faults - prev.write_faults),
+                    instruction_faults=max(0, agg.instruction_faults - prev.instruction_faults),
+                    mmap_calls=max(0, agg.mmap_calls - prev.mmap_calls),
+                    munmap_calls=max(0, agg.munmap_calls - prev.munmap_calls),
+                    mprotect_calls=max(0, agg.mprotect_calls - prev.mprotect_calls),
+                    brk_calls=max(0, agg.brk_calls - prev.brk_calls),
+                    mmap_bytes=max(0, agg.mmap_bytes - prev.mmap_bytes),
+                    munmap_bytes=max(0, agg.munmap_bytes - prev.munmap_bytes),
+                    mprotect_bytes=max(0, agg.mprotect_bytes - prev.mprotect_bytes),
+                    brk_growth_bytes=max(0, agg.brk_growth_bytes - prev.brk_growth_bytes),
+                    brk_shrink_bytes=max(0, agg.brk_shrink_bytes - prev.brk_shrink_bytes),
                     lbr_samples=max(0, agg.lbr_samples - prev.lbr_samples),
                     lbr_entries=max(0, agg.lbr_entries - prev.lbr_entries),
                     samples=max(0, agg.samples - prev.samples),

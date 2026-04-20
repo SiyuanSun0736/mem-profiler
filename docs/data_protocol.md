@@ -41,7 +41,7 @@ data/run_001/
 | `window_sec` | number | 时间窗大小（秒） |
 | `sample_rate` | integer | 兼容旧 CLI 名称；实际语义是 perf sample_period（每 N 次事件触发一次） |
 | `collection_backend` | string | 当前采集后端，例如 `bcc`、`perf_event_open`、`hybrid_perf_event_open_bcc`、`libbpf` |
-| `enabled_probes` | object | `{ llc: bool, dtlb: bool, itlb: bool, fault: bool, lbr: bool }` |
+| `enabled_probes` | object | `{ llc: bool, dtlb: bool, itlb: bool, fault: bool, fault_classification: bool, lbr: bool, mm_syscalls: bool }` |
 | `observations` | array<object> | 本次运行启用的观测项定义；用于表达 PMU grouping、multiplex 处理方式以及未来的 LBR 接入点 |
 | `host_info` | object | `{ hostname, kernel_version, cpu_model, num_cpus }` |
 
@@ -57,7 +57,7 @@ data/run_001/
 ### 示例
 
 ```jsonl
-{"schema_version":"2.0","run_id":"a1b2c3d4-...","start_ts_iso":"2026-04-14T10:00:00+00:00","end_ts_iso":null,"target_pid":1234,"target_tid":0,"target_comm":"nginx","aggregation_scope":"per_tid","window_sec":1.0,"sample_rate":100,"collection_backend":"bcc","enabled_probes":{"llc":true,"dtlb":true,"itlb":true,"fault":true,"lbr":true},"observations":[{"observation_id":"pmu_llc_load_miss","kind":"pmu_sampling","backend":"bcc_perf_event_raw","metrics":["llc_load_misses","samples"],"scope":"per_tid","sample_period":100,"perf_event":{"type":"hw_cache","config":"ll.read.miss"},"group":{"id":"pmu_cache"},"multiplex":{"mode":"opaque_backend","scaling_fields":[]},"notes":"Accumulated via ctx->sample_period per handler invocation."}],"host_info":{"hostname":"dev01","kernel_version":"6.8.0","cpu_model":"Intel Core i7-12700","num_cpus":20}}
+{"schema_version":"2.0","run_id":"a1b2c3d4-...","start_ts_iso":"2026-04-14T10:00:00+00:00","end_ts_iso":null,"target_pid":1234,"target_tid":0,"target_comm":"nginx","aggregation_scope":"per_tid","window_sec":1.0,"sample_rate":100,"collection_backend":"bcc","enabled_probes":{"llc":true,"dtlb":true,"itlb":true,"fault":true,"fault_classification":true,"lbr":true,"mm_syscalls":true},"observations":[{"observation_id":"pmu_llc_load_miss","kind":"pmu_sampling","backend":"bcc_perf_event_raw","metrics":["llc_load_misses","samples"],"scope":"per_tid","sample_period":100,"perf_event":{"type":"hw_cache","config":"ll.read.miss"},"group":{"id":"pmu_cache"},"multiplex":{"mode":"opaque_backend","scaling_fields":[]},"notes":"Accumulated via ctx->sample_period per handler invocation."}],"host_info":{"hostname":"dev01","kernel_version":"6.8.0","cpu_model":"Intel Core i7-12700","num_cpus":20}}
 {"schema_version":"2.0","run_id":"a1b2c3d4-...","end_ts_iso":"2026-04-14T10:01:05+00:00","_record_type":"run_end"}
 ```
 
@@ -99,7 +99,9 @@ data/run_001/
 - 当 PMU backend 为 `bcc_perf_event_raw` 时，字段为近似事件计数，通过每次 handler 触发时累加 `ctx->sample_period` 得到。
 - 当 PMU backend 为 `perf_event_open` 时，字段来自用户态定期读取 perf fd 的累计计数，并按 `time_enabled/time_running` 做缩放。
 - `samples` 仍表示 eBPF handler 的触发次数，也就是采样命中数，而不是放大后的近似事件总数。
-- `minor_faults` / `major_faults` 来自 trace hook，表示实际 fault 次数，不经过 `sample_period` 放大。
+- `minor_faults` / `major_faults` 来自 `handle_mm_fault` 的 entry/return 配对；major/minor 由返回值中的 `VM_FAULT_MAJOR` 判定，不经过 `sample_period` 放大。
+- 若启用 fault classification，则 `anon_faults` / `file_faults` / `shared_faults` / `private_faults` / `write_faults` / `instruction_faults` 与 page fault 同源，表示对同一批 fault 的分类切片。
+- 若启用 mm syscall tracing，则 `mmap_*` / `munmap_*` / `mprotect_*` / `brk_*` 字段来自对应 syscall 的 entry/return 配对，仅在成功返回时累加。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -126,6 +128,21 @@ data/run_001/
 | `instructions` | integer ≥ 0 | 本窗口 retired instructions 计数；具体来源由 observation backend 决定 |
 | `minor_faults` | integer ≥ 0 | 本窗口 minor page fault 次数 |
 | `major_faults` | integer ≥ 0 | 本窗口 major page fault 次数 |
+| `anon_faults` | integer ≥ 0 | 本窗口匿名映射 page fault 次数 |
+| `file_faults` | integer ≥ 0 | 本窗口文件映射 page fault 次数 |
+| `shared_faults` | integer ≥ 0 | 本窗口共享映射 page fault 次数 |
+| `private_faults` | integer ≥ 0 | 本窗口私有映射 page fault 次数 |
+| `write_faults` | integer ≥ 0 | 本窗口写入型 page fault 次数 |
+| `instruction_faults` | integer ≥ 0 | 本窗口指令取指型 page fault 次数 |
+| `mmap_calls` | integer ≥ 0 | 本窗口成功 mmap 次数 |
+| `munmap_calls` | integer ≥ 0 | 本窗口成功 munmap 次数 |
+| `mprotect_calls` | integer ≥ 0 | 本窗口成功 mprotect 次数 |
+| `brk_calls` | integer ≥ 0 | 本窗口成功 brk 次数 |
+| `mmap_bytes` | integer ≥ 0 | 本窗口成功 mmap 请求长度之和 |
+| `munmap_bytes` | integer ≥ 0 | 本窗口成功 munmap 请求长度之和 |
+| `mprotect_bytes` | integer ≥ 0 | 本窗口成功 mprotect 请求长度之和 |
+| `brk_growth_bytes` | integer ≥ 0 | 本窗口 brk 正向增长字节数 |
+| `brk_shrink_bytes` | integer ≥ 0 | 本窗口 brk 负向收缩字节数 |
 | `lbr_samples` | integer ≥ 0 | 本窗口 LBR 分支栈样本数 |
 | `lbr_entries` | integer ≥ 0 | 本窗口累计导出的 LBR 分支条目数 |
 | `samples` | integer ≥ 0 | 本窗口 eBPF handler 触发总次数 |
@@ -133,7 +150,7 @@ data/run_001/
 ### 示例
 
 ```jsonl
-{"schema_version":"2.0","run_id":"a1b2c3d4-...","window_id":0,"start_ns":1000000000,"end_ns":1001000000000,"entity_scope":"tid","pid":1234,"tid":1239,"comm":"nginx","llc_loads":981200,"llc_load_misses":452100,"llc_stores":208800,"llc_store_misses":10200,"dtlb_loads":33000,"dtlb_load_misses":8900,"dtlb_stores":7400,"dtlb_store_misses":1100,"dtlb_misses":10000,"itlb_load_misses":700,"cycles":6103200,"instructions":5862600,"minor_faults":12,"major_faults":0,"lbr_samples":45,"lbr_entries":318,"samples":4723}
+{"schema_version":"2.0","run_id":"a1b2c3d4-...","window_id":0,"start_ns":1000000000,"end_ns":1001000000000,"entity_scope":"tid","pid":1234,"tid":1239,"comm":"nginx","llc_loads":981200,"llc_load_misses":452100,"llc_stores":208800,"llc_store_misses":10200,"dtlb_loads":33000,"dtlb_load_misses":8900,"dtlb_stores":7400,"dtlb_store_misses":1100,"dtlb_misses":10000,"itlb_load_misses":700,"cycles":6103200,"instructions":5862600,"minor_faults":12,"major_faults":0,"anon_faults":11,"file_faults":1,"write_faults":3,"mmap_calls":2,"mmap_bytes":1048576,"brk_calls":1,"brk_growth_bytes":131072,"lbr_samples":45,"lbr_entries":318,"samples":4723}
 ```
 
 ---
@@ -153,9 +170,17 @@ data/run_001/
 | `pid` | integer | |
 | `tid` | integer | 线程 ID |
 | `comm` | string | |
-| `event_type` | integer | 1=llc_load_miss 2=llc_store_miss 3=dtlb_miss 4=minor_fault 5=major_fault 6=lbr_sample |
-| `addr` | integer | 相关内存地址（page fault 时为出错地址，perf_event 时为 IP） |
-| `ip` | integer | 采样时的指令指针 |
+| `event_type` | integer | 1=llc_load_miss 2=llc_store_miss 3=dtlb_miss 4=minor_fault 5=major_fault 6=lbr_sample 7=mmap 8=munmap 9=mprotect 10=brk |
+| `event_name` | string | `event_type` 的可读名称 |
+| `addr` | integer | 相关地址（page fault 时为 fault 地址，mmap/munmap/mprotect/brk 时为目标或返回地址，perf_event/LBR 时为采样地址） |
+| `ip` | integer | 触发该记录时采到的指令指针或探针上下文 IP |
+| `requested_addr` | integer | 可选；mmap/brk 的请求地址 |
+| `length` | integer | 可选；mmap/munmap/mprotect 请求长度 |
+| `prot` | integer | 可选；mmap/mprotect 的保护位 |
+| `event_flags` | integer | 可选；page fault 的 fault_flags 或 mmap flags |
+| `class_flags` | integer | 可选；分类位图（anon/file/shared/private/write/exec） |
+| `vma_flags` | integer | 可选；page fault 对应 VMA 的 `vm_flags` |
+| `delta_bytes` | integer | 可选；brk 相对上一次成功返回值的增量 |
 | `lbr` | array<object> | 可选，仅 LBR 事件出现；每项含 `{ from_ip, to_ip, flags }`，当前最多导出 8 条 |
 
 ---

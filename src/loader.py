@@ -63,6 +63,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-itlb",      action="store_true", help="禁用 iTLB 访问/miss 采样（PMU 组 3）")
     p.add_argument("--no-fault",     action="store_true", help="禁用 page fault 追踪（kprobe）")
     p.add_argument(
+        "--no-fault-classification",
+        action="store_true",
+        help="禁用增强 page fault 分类（anon/file/shared/private/write/instruction）",
+    )
+    p.add_argument(
+        "--no-mm-syscalls",
+        action="store_true",
+        help="禁用 mmap/munmap/mprotect/brk 追踪（默认开启）",
+    )
+    p.add_argument(
         "--track-children",
         action="store_true",
         help=(
@@ -112,7 +122,9 @@ def main() -> None:
         enable_dtlb=not args.no_dtlb,
         enable_itlb=not args.no_itlb,
         enable_fault=not args.no_fault,
+        enable_fault_classification=(not args.no_fault) and (not args.no_fault_classification),
         enable_lbr=args.lbr,
+        enable_mm_syscalls=not args.no_mm_syscalls,
         per_tid=args.per_tid,
         track_children=args.track_children,
         pmu_backend=args.pmu_backend,
@@ -143,7 +155,9 @@ def main() -> None:
         enable_dtlb=not args.no_dtlb,
         enable_itlb=not args.no_itlb,
         enable_fault=not args.no_fault,
+        enable_fault_classification=(not args.no_fault) and (not args.no_fault_classification),
         enable_lbr=args.lbr,
+        enable_mm_syscalls=not args.no_mm_syscalls,
         aggregation_scope="per_tid" if (args.per_tid or args.tid > 0) else "per_pid",
         observations=collector.describe_observations(),
         collection_backend=collector.describe_collection_backend(),

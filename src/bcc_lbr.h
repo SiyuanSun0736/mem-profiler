@@ -9,11 +9,17 @@ int on_lbr_sample(struct bpf_perf_event_data *ctx)
 {
     BCC_PROLOGUE();
 
-    struct perf_branch_entry branches[MAX_LBR_ENTRIES] = {};
-    long bytes = bpf_read_branch_records(ctx, branches, sizeof(branches), 0);
+    u32 zero = 0;
+    struct lbr_branch_scratch_t *scratch = lbr_branch_scratch_map.lookup(&zero);
+    if (!scratch)
+        return 0;
+
+    __builtin_memset(scratch, 0, sizeof(*scratch));
+
+    long bytes = bpf_read_branch_records(ctx, scratch->entries, sizeof(scratch->entries), 0);
     u8 nr = 0;
     if (bytes > 0) {
-        nr = bytes / sizeof(branches[0]);
+        nr = bytes / sizeof(scratch->entries[0]);
         if (nr > MAX_LBR_ENTRIES)
             nr = MAX_LBR_ENTRIES;
     }
@@ -22,6 +28,6 @@ int on_lbr_sample(struct bpf_perf_event_data *ctx)
     s->lbr_entries += nr;
     touch_stats(s);
 
-    emit_lbr(ctx, pid, tid, PT_REGS_IP(&ctx->regs), nr, branches);
+    emit_lbr(ctx, pid, tid, PT_REGS_IP(&ctx->regs), nr, scratch->entries);
     return 0;
 }

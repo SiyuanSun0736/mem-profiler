@@ -24,6 +24,23 @@ static __always_inline bool per_tid_enabled(void)
     return enabled && *enabled != 0;
 }
 
+static __always_inline bool fault_classification_enabled(void)
+{
+    u32 key = 0;
+    u32 *enabled = fault_classification_map.lookup(&key);
+    return enabled && *enabled != 0;
+}
+
+static __always_inline struct mem_event_t *event_scratch_get(void)
+{
+    u32 key = 0;
+    struct mem_event_t *ev = event_scratch_map.lookup(&key);
+    if (!ev)
+        return NULL;
+    __builtin_memset(ev, 0, sizeof(*ev));
+    return ev;
+}
+
 static __always_inline bool comm_allowed(void)
 {
     u32 key = 0;
@@ -121,15 +138,79 @@ static __always_inline void emit(u32 pid, u32 tid, u8 etype, u64 addr, u64 ip)
     if (!emit_events_enabled())
         return;
 
-    struct mem_event_t ev = {};
-    ev.ts_ns      = bpf_ktime_get_ns();
-    ev.pid        = pid;
-    ev.tid        = tid;
-    ev.event_type = etype;
-    ev.addr       = addr;
-    ev.ip         = ip;
-    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
-    events_rb.ringbuf_output(&ev, sizeof(ev), 0);
+    struct mem_event_t *ev = event_scratch_get();
+    if (!ev)
+        return;
+    ev->ts_ns      = bpf_ktime_get_ns();
+    ev->pid        = pid;
+    ev->tid        = tid;
+    ev->event_type = etype;
+    ev->addr       = addr;
+    ev->ip         = ip;
+    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
+    events_rb.ringbuf_output(ev, sizeof(*ev), 0);
+}
+
+static __always_inline void emit_fault_event(u32 pid,
+                                             u32 tid,
+                                             u8 etype,
+                                             u64 addr,
+                                             u64 ip,
+                                             u32 fault_flags,
+                                             u32 class_flags,
+                                             u64 vma_flags)
+{
+    if (!emit_events_enabled())
+        return;
+
+    struct mem_event_t *ev = event_scratch_get();
+    if (!ev)
+        return;
+    ev->ts_ns       = bpf_ktime_get_ns();
+    ev->pid         = pid;
+    ev->tid         = tid;
+    ev->event_type  = etype;
+    ev->addr        = addr;
+    ev->ip          = ip;
+    ev->event_flags = fault_flags;
+    ev->class_flags = class_flags;
+    ev->vma_flags   = vma_flags;
+    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
+    events_rb.ringbuf_output(ev, sizeof(*ev), 0);
+}
+
+static __always_inline void emit_mm_syscall_event(u32 pid,
+                                                  u32 tid,
+                                                  u8 etype,
+                                                  u64 addr,
+                                                  u64 ip,
+                                                  u64 requested_addr,
+                                                  u64 length,
+                                                  u32 prot,
+                                                  u32 event_flags,
+                                                  u32 class_flags,
+                                                  s64 delta_bytes)
+{
+    if (!emit_events_enabled())
+        return;
+
+    struct mem_event_t *ev = event_scratch_get();
+    if (!ev)
+        return;
+    ev->ts_ns          = bpf_ktime_get_ns();
+    ev->pid            = pid;
+    ev->tid            = tid;
+    ev->event_type     = etype;
+    ev->addr           = addr;
+    ev->ip             = ip;
+    ev->requested_addr = requested_addr;
+    ev->length         = length;
+    ev->prot           = prot;
+    ev->event_flags    = event_flags;
+    ev->class_flags    = class_flags;
+    ev->delta_bytes    = delta_bytes;
+    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
+    events_rb.ringbuf_output(ev, sizeof(*ev), 0);
 }
 
 static __always_inline void emit_lbr(struct bpf_perf_event_data *ctx,
@@ -142,26 +223,28 @@ static __always_inline void emit_lbr(struct bpf_perf_event_data *ctx,
     if (!emit_events_enabled())
         return;
 
-    struct mem_event_t ev = {};
-    ev.ts_ns      = bpf_ktime_get_ns();
-    ev.pid        = pid;
-    ev.tid        = tid;
-    ev.event_type = 6;
-    ev.lbr_nr     = nr;
-    ev.addr       = ctx->addr;
-    ev.ip         = ip;
-    bpf_get_current_comm(ev.comm, sizeof(ev.comm));
+    struct mem_event_t *ev = event_scratch_get();
+    if (!ev)
+        return;
+    ev->ts_ns      = bpf_ktime_get_ns();
+    ev->pid        = pid;
+    ev->tid        = tid;
+    ev->event_type = MEM_EVENT_LBR;
+    ev->lbr_nr     = nr;
+    ev->addr       = ctx->addr;
+    ev->ip         = ip;
+    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
 
 #pragma unroll
     for (int i = 0; i < MAX_LBR_ENTRIES; i++) {
         if (i >= nr)
             break;
-        ev.lbr[i].from_ip = branches[i].from;
-        ev.lbr[i].to_ip   = branches[i].to;
-        ev.lbr[i].flags   = ((__u64 *)&branches[i])[2];
+        ev->lbr[i].from_ip = branches[i].from;
+        ev->lbr[i].to_ip   = branches[i].to;
+        ev->lbr[i].flags   = ((__u64 *)&branches[i])[2];
     }
 
-    events_rb.ringbuf_output(&ev, sizeof(ev), 0);
+    events_rb.ringbuf_output(ev, sizeof(*ev), 0);
 }
 
 /* ================================================================== */

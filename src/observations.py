@@ -65,7 +65,9 @@ def build_default_observations(
     enable_dtlb: bool,
     enable_itlb: bool,
     enable_fault: bool,
+    enable_fault_classification: bool,
     enable_lbr: bool,
+    enable_mm_syscalls: bool,
     scope: str,
     llc_store_via_generic: bool = False,
     pmu_backend: str = "bcc",
@@ -270,17 +272,72 @@ def build_default_observations(
         )
 
     if enable_fault:
+        fault_metrics = ["minor_faults", "major_faults"]
+        fault_notes = "Kernel trace hook; no PMU multiplex or group leader semantics."
+        if enable_fault_classification:
+            fault_metrics.extend([
+                "anon_faults",
+                "file_faults",
+                "shared_faults",
+                "private_faults",
+                "write_faults",
+                "instruction_faults",
+            ])
+            fault_notes = (
+                "Kernel kprobe+kretprobe pair on handle_mm_fault. "
+                "Major/minor is derived from VM_FAULT_MAJOR on return; classification is derived from fault_flags and VMA metadata."
+            )
         observations.append(
             ObservationSpec(
                 observation_id="trace_page_fault",
                 kind="trace_hook",
-                backend="bcc_kprobe",
-                metrics=["minor_faults", "major_faults"],
+                backend="bcc_kprobe_kretprobe",
+                metrics=fault_metrics,
                 scope=scope,
                 multiplex_mode="not_applicable",
-                notes="Kernel trace hook; no PMU multiplex or group leader semantics.",
+                notes=fault_notes,
             )
         )
+
+    if enable_mm_syscalls:
+        observations.extend([
+            ObservationSpec(
+                observation_id="trace_mmap",
+                kind="trace_hook",
+                backend="bcc_kprobe_kretprobe",
+                metrics=["mmap_calls", "mmap_bytes"],
+                scope=scope,
+                multiplex_mode="not_applicable",
+                notes="Successful mmap syscalls only; bytes record requested mapping length.",
+            ),
+            ObservationSpec(
+                observation_id="trace_munmap",
+                kind="trace_hook",
+                backend="bcc_kprobe_kretprobe",
+                metrics=["munmap_calls", "munmap_bytes"],
+                scope=scope,
+                multiplex_mode="not_applicable",
+                notes="Successful munmap syscalls only; bytes record requested unmap length.",
+            ),
+            ObservationSpec(
+                observation_id="trace_mprotect",
+                kind="trace_hook",
+                backend="bcc_kprobe_kretprobe",
+                metrics=["mprotect_calls", "mprotect_bytes"],
+                scope=scope,
+                multiplex_mode="not_applicable",
+                notes="Successful mprotect syscalls only; bytes record requested protection range length.",
+            ),
+            ObservationSpec(
+                observation_id="trace_brk",
+                kind="trace_hook",
+                backend="bcc_kprobe_kretprobe",
+                metrics=["brk_calls", "brk_growth_bytes", "brk_shrink_bytes"],
+                scope=scope,
+                multiplex_mode="not_applicable",
+                notes="brk deltas are derived from successive successful brk return values per PID.",
+            ),
+        ])
 
     if enable_lbr:
         observations.append(

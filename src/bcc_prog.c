@@ -18,6 +18,7 @@
  *   bcc_tlb.h      — dTLB/iTLB handler
  *   bcc_lbr.h      — LBR 分支栈采样 handler
  *   bcc_fault.h    — page fault kprobe handler
+ *   bcc_mm_syscalls.h — mmap/munmap/mprotect/brk handler
  */
 
 #include "bcc_types.h"
@@ -28,3 +29,4 @@
 #include "bcc_tlb.h"
 #include "bcc_lbr.h"
 #include "bcc_fault.h"
+#include "bcc_mm_syscalls.h"

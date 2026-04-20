@@ -22,3 +22,13 @@ BPF_ARRAY(target_comm_map, struct task_comm_filter_t, 1);
 BPF_HASH(child_pid_set, u32, u8, 4096);
 BPF_ARRAY(per_tid_map,    u32, 1);
 BPF_ARRAY(emit_events_map, u32, 1);
+BPF_ARRAY(fault_classification_map, u32, 1);
+
+BPF_HASH(pending_fault_args, u32, struct pending_fault_t, 8192);
+BPF_HASH(pending_mmap_args, u32, struct pending_mmap_args_t, 8192);
+BPF_HASH(pending_munmap_args, u32, struct pending_range_args_t, 8192);
+BPF_HASH(pending_mprotect_args, u32, struct pending_range_args_t, 8192);
+BPF_HASH(pending_brk_args, u32, struct pending_brk_args_t, 8192);
+BPF_HASH(last_brk_by_tgid, u32, u64, 8192);
+BPF_PERCPU_ARRAY(event_scratch_map, struct mem_event_t, 1);
+BPF_PERCPU_ARRAY(lbr_branch_scratch_map, struct lbr_branch_scratch_t, 1);

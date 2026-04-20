@@ -25,7 +25,9 @@
         "dtlb":  { "type": "boolean" },
         "itlb":  { "type": "boolean" },
         "fault": { "type": "boolean" },
-        "lbr":   { "type": "boolean" }
+        "fault_classification": { "type": "boolean" },
+        "lbr":   { "type": "boolean" },
+        "mm_syscalls": { "type": "boolean" }
       }
     },
     "observations": {

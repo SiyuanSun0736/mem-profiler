@@ -36,6 +36,10 @@ METRICS = [
     "dtlb_misses",
     "minor_faults",
     "major_faults",
+    "mmap_calls",
+    "munmap_calls",
+    "mprotect_calls",
+    "brk_calls",
     "lbr_samples",
 ]
 
@@ -46,6 +50,10 @@ EVENT_TYPE_NAMES = {
     4: "minor_faults",
     5: "major_faults",
     6: "lbr_samples",
+    7: "mmap_calls",
+    8: "munmap_calls",
+    9: "mprotect_calls",
+    10: "brk_calls",
 }
 
 

@@ -25,7 +25,10 @@
     "event_type": {
       "type": "string",
       "enum": ["llc_load_misses", "llc_store_misses", "dtlb_misses",
-               "minor_faults", "major_faults"]
+               "minor_faults", "major_faults", "anon_faults",
+               "file_faults", "shared_faults", "private_faults",
+               "write_faults", "instruction_faults", "mmap_calls",
+               "munmap_calls", "mprotect_calls", "brk_calls"]
     },
     "count":    { "type": "integer", "minimum": 0 },
     "fraction": {
