@@ -21,6 +21,7 @@ from typing import Any, Optional
 _PERF_ATTR_FLAG_INHERIT: int = 1 << 1
 
 from observations import build_default_observations
+from perf_counter import PerfCounterBackend, PerfCounterSnapshot
 
 _BCC_PROG_PATH = pathlib.Path(__file__).parent / "bcc_prog.c"
 _MAX_LBR_ENTRIES = 8
@@ -249,6 +250,7 @@ class Collector:
         enable_lbr: bool = False,
         per_tid: bool = False,
         track_children: bool = False,
+        pmu_backend: str = "auto",
     ) -> None:
         self.target_pid = target_pid
         self.target_tid = target_tid
@@ -262,18 +264,15 @@ class Collector:
         self.enable_fault = enable_fault
         self.enable_lbr = enable_lbr
         self.per_tid = per_tid or target_tid > 0
+        self.pmu_backend = pmu_backend
+        self._use_bcc_pmu = pmu_backend == "bcc"
+        self._llc_store_via_generic = False
+        self._perf_backend: Optional[PerfCounterBackend] = None
         # track_children 只在指定了具体 target_pid 时才生效；
         # comm 模式本就是全局采样，子进程总能被内核防弹层捕获。
         self.track_children: bool = track_children and (target_pid > 0)
-        self._observations = build_default_observations(
-            sample_rate=sample_rate,
-            enable_llc=enable_llc,
-            enable_dtlb=enable_dtlb,
-            enable_itlb=enable_itlb,
-            enable_fault=enable_fault,
-            enable_lbr=enable_lbr,
-            scope="per_tid" if self.per_tid else "per_pid",
-        )
+        self._observations: list[dict] = []
+        self._refresh_observations()
         self._stale_entity_timeout_ns = max(
             int(self.window_sec * _STALE_ENTITY_WINDOW_MULTIPLIER * 1e9),
             _MIN_STALE_ENTITY_TIMEOUT_NS,
@@ -288,6 +287,26 @@ class Collector:
         self._child_monitor_lock: threading.Lock = threading.Lock()
         self._child_monitor_stop: Optional[threading.Event] = None
         self._child_monitor_thread: Optional[threading.Thread] = None
+
+    def _refresh_observations(self) -> None:
+        self._observations = build_default_observations(
+            sample_rate=self.sample_rate,
+            enable_llc=self.enable_llc,
+            enable_dtlb=self.enable_dtlb,
+            enable_itlb=self.enable_itlb,
+            enable_fault=self.enable_fault,
+            enable_lbr=self.enable_lbr,
+            scope="per_tid" if self.per_tid else "per_pid",
+            llc_store_via_generic=self._llc_store_via_generic,
+            pmu_backend="bcc" if self._use_bcc_pmu else "perf_event_open",
+        )
+
+    def describe_collection_backend(self) -> str:
+        if self._use_bcc_pmu:
+            return "bcc"
+        if self.enable_fault or self.enable_lbr:
+            return "hybrid_perf_event_open_bcc"
+        return "perf_event_open"
 
     def _make_attr(
         self,
@@ -516,32 +535,69 @@ class Collector:
             emit_events_map[emit_events_map.Key(0)] = emit_events_map.Leaf(1)
             self._open_event_stream()
 
-        # ── cycles + instructions group ─────────────────────────────────
-        # These are fundamental hardware counters used to derive IPC and
-        # MPKI.  Grouped so the kernel keeps them co-scheduled and their
-        # ratio remains meaningful under PMU multiplexing.
-        self._attach_perf_event_group([
-            (                                                       # ── leader
-                self._make_attr(
-                    Perf.PERF_TYPE_HARDWARE,
-                    _PERF_COUNT_HW_CPU_CYCLES,
-                    self.sample_rate,
-                ),
-                "on_cycles",
-                "CPU cycles",
-            ),
-            (                                                       # ── member
-                self._make_attr(
-                    Perf.PERF_TYPE_HARDWARE,
-                    _PERF_COUNT_HW_INSTRUCTIONS,
-                    self.sample_rate,
-                ),
-                "on_instructions",
-                "hardware instructions",
-            ),
-        ], inherit=self.track_children)
+        if self.pmu_backend in {"auto", "perf_event_open"}:
+            try:
+                perf_backend = PerfCounterBackend(
+                    target_pid=self.target_pid,
+                    target_tid=self.target_tid,
+                    target_comm=self.target_comm,
+                    per_tid=self.per_tid,
+                    track_children=self.track_children,
+                    enable_llc=self.enable_llc,
+                    enable_dtlb=self.enable_dtlb,
+                    enable_itlb=self.enable_itlb,
+                )
+                perf_backend.start()
+                self._perf_backend = perf_backend
+                self._use_bcc_pmu = False
+                self._llc_store_via_generic = perf_backend.uses_llc_store_proxy()
+                print(
+                    "[info] PMU backend = perf_event_open (time_enabled/time_running)",
+                    flush=True,
+                )
+            except Exception as exc:
+                if self._perf_backend is not None:
+                    self._perf_backend.stop()
+                    self._perf_backend = None
+                if self.pmu_backend == "perf_event_open":
+                    raise RuntimeError(f"perf_event_open PMU backend 初始化失败: {exc}") from exc
+                self._use_bcc_pmu = True
+                print(
+                    f"[警告] perf_event_open PMU backend 初始化失败 ({exc})，降级为 BCC sampling",
+                    flush=True,
+                )
+        else:
+            self._use_bcc_pmu = True
 
-        if self.enable_llc:
+        self._refresh_observations()
+
+        if self._use_bcc_pmu:
+            # ── cycles + instructions group ─────────────────────────────────
+            # These are fundamental hardware counters used to derive IPC and
+            # MPKI.  Grouped so the kernel keeps them co-scheduled and their
+            # ratio remains meaningful under PMU multiplexing.
+            self._attach_perf_event_group([
+                (
+                    self._make_attr(
+                        Perf.PERF_TYPE_HARDWARE,
+                        _PERF_COUNT_HW_CPU_CYCLES,
+                        self.sample_rate,
+                    ),
+                    "on_cycles",
+                    "CPU cycles",
+                ),
+                (
+                    self._make_attr(
+                        Perf.PERF_TYPE_HARDWARE,
+                        _PERF_COUNT_HW_INSTRUCTIONS,
+                        self.sample_rate,
+                    ),
+                    "on_instructions",
+                    "hardware instructions",
+                ),
+            ], inherit=self.track_children)
+
+        if self.enable_llc and self._use_bcc_pmu:
             # ── LLC read group: load (leader) + load miss (member) ──────
             # These events are universally supported for sampling.
             self._attach_perf_event_group([
@@ -616,6 +672,7 @@ class Collector:
                     "降级为 generic cache-references / cache-misses",
                     flush=True,
                 )
+                self._llc_store_via_generic = True
                 self._attach_perf_event_group([
                     (                                               # ── leader
                         self._make_attr(
@@ -636,19 +693,9 @@ class Collector:
                         "cache-misses [LLC store miss proxy]",
                     ),
                 ], inherit=self.track_children)
-                # Rebuild observations to reflect the proxy events used.
-                self._observations = build_default_observations(
-                    sample_rate=self.sample_rate,
-                    enable_llc=self.enable_llc,
-                    enable_dtlb=self.enable_dtlb,
-                    enable_itlb=self.enable_itlb,
-                    enable_fault=self.enable_fault,
-                    enable_lbr=self.enable_lbr,
-                    scope="per_tid" if self.per_tid else "per_pid",
-                    llc_store_via_generic=True,
-                )
+                self._refresh_observations()
 
-        if self.enable_dtlb:
+        if self.enable_dtlb and self._use_bcc_pmu:
             # PMU hardware typically provides 4 programmable counters.
             # A single group must not exceed 4 events or the kernel will
             # refuse to schedule it ("event group too large").
@@ -708,7 +755,7 @@ class Collector:
                 ),
             ], inherit=self.track_children)
 
-        if self.enable_itlb:
+        if self.enable_itlb and self._use_bcc_pmu:
             # ── iTLB load miss (independent event) ─────────────────────
             # iTLB load access (HW_CACHE_RESULT_ACCESS) is not supported
             # on many Intel processors.  Attach only the miss counter as
@@ -758,7 +805,7 @@ class Collector:
             bpf.attach_kprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault")
             print("[probe] handle_mm_fault kprobe", flush=True)
 
-        if self.track_children:
+        if self.track_children and (self.enable_fault or self.enable_lbr):
             print(f"[info] track_children 已开启，启动子进程监控线程", flush=True)
             self._start_child_monitor()
 
@@ -804,76 +851,109 @@ class Collector:
             end_ns=now_ns,
         )
 
-        if self._bpf is None:
+        if self._bpf is None and self._perf_backend is None:
             return snap
 
-        raw_map = self._bpf["pid_stats"]
+        raw_map = self._bpf["pid_stats"] if self._bpf is not None else None
         current: dict[tuple[int, int], PidStats] = {}
 
-        try:
-            for key_obj, cpu_vals in raw_map.items():
-                pid = int(key_obj.pid)
-                tid = int(key_obj.tid)
-                entity_key = (pid, tid)
-                agg = PidStats(pid=pid, tid=tid, comm="")
+        if raw_map is not None:
+            try:
+                for key_obj, cpu_vals in raw_map.items():
+                    pid = int(key_obj.pid)
+                    tid = int(key_obj.tid)
+                    entity_key = (pid, tid)
+                    agg = PidStats(pid=pid, tid=tid, comm="")
 
-                for cv in cpu_vals:
-                    agg.llc_loads += int(cv.llc_loads)
-                    agg.llc_load_misses += int(cv.llc_load_misses)
-                    agg.llc_stores += int(cv.llc_stores)
-                    agg.llc_store_misses += int(cv.llc_store_misses)
-                    agg.dtlb_loads += int(cv.dtlb_loads)
-                    agg.dtlb_load_misses += int(cv.dtlb_load_misses)
-                    agg.dtlb_stores += int(cv.dtlb_stores)
-                    agg.dtlb_store_misses += int(cv.dtlb_store_misses)
-                    agg.dtlb_misses += int(cv.dtlb_misses)
-                    agg.itlb_load_misses += int(cv.itlb_load_misses)
-                    agg.cycles += int(cv.cycles)
-                    agg.instructions += int(cv.instructions)
-                    agg.minor_faults += int(cv.minor_faults)
-                    agg.major_faults += int(cv.major_faults)
-                    agg.lbr_samples += int(cv.lbr_samples)
-                    agg.lbr_entries += int(cv.lbr_entries)
-                    agg.samples += int(cv.samples)
-                    agg.last_seen_ns = max(agg.last_seen_ns, int(cv.last_seen_ns))
-                    if cv.comm and not agg.comm:
-                        agg.comm = _decode_comm(cv.comm)
+                    for cv in cpu_vals:
+                        agg.llc_loads += int(cv.llc_loads)
+                        agg.llc_load_misses += int(cv.llc_load_misses)
+                        agg.llc_stores += int(cv.llc_stores)
+                        agg.llc_store_misses += int(cv.llc_store_misses)
+                        agg.dtlb_loads += int(cv.dtlb_loads)
+                        agg.dtlb_load_misses += int(cv.dtlb_load_misses)
+                        agg.dtlb_stores += int(cv.dtlb_stores)
+                        agg.dtlb_store_misses += int(cv.dtlb_store_misses)
+                        agg.dtlb_misses += int(cv.dtlb_misses)
+                        agg.itlb_load_misses += int(cv.itlb_load_misses)
+                        agg.cycles += int(cv.cycles)
+                        agg.instructions += int(cv.instructions)
+                        agg.minor_faults += int(cv.minor_faults)
+                        agg.major_faults += int(cv.major_faults)
+                        agg.lbr_samples += int(cv.lbr_samples)
+                        agg.lbr_entries += int(cv.lbr_entries)
+                        agg.samples += int(cv.samples)
+                        agg.last_seen_ns = max(agg.last_seen_ns, int(cv.last_seen_ns))
+                        if cv.comm and not agg.comm:
+                            agg.comm = _decode_comm(cv.comm)
 
-                current[entity_key] = agg
-                prev = self._prev.get(entity_key)
-                if prev is None:
-                    snap.add(agg)
-                    continue
+                    current[entity_key] = agg
 
-                snap.add(
-                    PidStats(
-                        pid=pid,
-                        tid=tid,
-                        comm=agg.comm,
-                        llc_loads=max(0, agg.llc_loads - prev.llc_loads),
-                        llc_load_misses=max(0, agg.llc_load_misses - prev.llc_load_misses),
-                        llc_stores=max(0, agg.llc_stores - prev.llc_stores),
-                        llc_store_misses=max(0, agg.llc_store_misses - prev.llc_store_misses),
-                        dtlb_loads=max(0, agg.dtlb_loads - prev.dtlb_loads),
-                        dtlb_load_misses=max(0, agg.dtlb_load_misses - prev.dtlb_load_misses),
-                        dtlb_stores=max(0, agg.dtlb_stores - prev.dtlb_stores),
-                        dtlb_store_misses=max(0, agg.dtlb_store_misses - prev.dtlb_store_misses),
-                        dtlb_misses=max(0, agg.dtlb_misses - prev.dtlb_misses),
-                        itlb_load_misses=max(0, agg.itlb_load_misses - prev.itlb_load_misses),
-                        cycles=max(0, agg.cycles - prev.cycles),
-                        instructions=max(0, agg.instructions - prev.instructions),
-                        minor_faults=max(0, agg.minor_faults - prev.minor_faults),
-                        major_faults=max(0, agg.major_faults - prev.major_faults),
-                        lbr_samples=max(0, agg.lbr_samples - prev.lbr_samples),
-                        lbr_entries=max(0, agg.lbr_entries - prev.lbr_entries),
-                        samples=max(0, agg.samples - prev.samples),
+            except Exception as exc:
+                print(f"[警告] 读取 pid_stats 失败: {exc}", file=sys.stderr, flush=True)
+
+        if self._perf_backend is not None:
+            perf_current = self._perf_backend.read()
+            for entity_key, perf_stats in perf_current.items():
+                agg = current.get(entity_key)
+                if agg is None:
+                    agg = PidStats(
+                        pid=perf_stats.pid,
+                        tid=perf_stats.tid,
+                        comm=perf_stats.comm,
                     )
+                    current[entity_key] = agg
+                elif perf_stats.comm and not agg.comm:
+                    agg.comm = perf_stats.comm
+
+                agg.llc_loads += perf_stats.llc_loads
+                agg.llc_load_misses += perf_stats.llc_load_misses
+                agg.llc_stores += perf_stats.llc_stores
+                agg.llc_store_misses += perf_stats.llc_store_misses
+                agg.dtlb_loads += perf_stats.dtlb_loads
+                agg.dtlb_load_misses += perf_stats.dtlb_load_misses
+                agg.dtlb_stores += perf_stats.dtlb_stores
+                agg.dtlb_store_misses += perf_stats.dtlb_store_misses
+                agg.dtlb_misses += perf_stats.dtlb_misses
+                agg.itlb_load_misses += perf_stats.itlb_load_misses
+                agg.cycles += perf_stats.cycles
+                agg.instructions += perf_stats.instructions
+                agg.last_seen_ns = max(agg.last_seen_ns, perf_stats.last_seen_ns)
+
+        if raw_map is not None:
+            self._prune_stale_entities(raw_map, current, now_ns)
+
+        for entity_key, agg in current.items():
+            prev = self._prev.get(entity_key)
+            if prev is None:
+                snap.add(agg)
+                continue
+
+            snap.add(
+                PidStats(
+                    pid=agg.pid,
+                    tid=agg.tid,
+                    comm=agg.comm,
+                    llc_loads=max(0, agg.llc_loads - prev.llc_loads),
+                    llc_load_misses=max(0, agg.llc_load_misses - prev.llc_load_misses),
+                    llc_stores=max(0, agg.llc_stores - prev.llc_stores),
+                    llc_store_misses=max(0, agg.llc_store_misses - prev.llc_store_misses),
+                    dtlb_loads=max(0, agg.dtlb_loads - prev.dtlb_loads),
+                    dtlb_load_misses=max(0, agg.dtlb_load_misses - prev.dtlb_load_misses),
+                    dtlb_stores=max(0, agg.dtlb_stores - prev.dtlb_stores),
+                    dtlb_store_misses=max(0, agg.dtlb_store_misses - prev.dtlb_store_misses),
+                    dtlb_misses=max(0, agg.dtlb_misses - prev.dtlb_misses),
+                    itlb_load_misses=max(0, agg.itlb_load_misses - prev.itlb_load_misses),
+                    cycles=max(0, agg.cycles - prev.cycles),
+                    instructions=max(0, agg.instructions - prev.instructions),
+                    minor_faults=max(0, agg.minor_faults - prev.minor_faults),
+                    major_faults=max(0, agg.major_faults - prev.major_faults),
+                    lbr_samples=max(0, agg.lbr_samples - prev.lbr_samples),
+                    lbr_entries=max(0, agg.lbr_entries - prev.lbr_entries),
+                    samples=max(0, agg.samples - prev.samples),
                 )
+            )
 
-        except Exception as exc:
-            print(f"[警告] 读取 pid_stats 失败: {exc}", file=sys.stderr, flush=True)
-
-        self._prune_stale_entities(raw_map, current, now_ns)
         self._prev = current
         if self._pending_events:
             snap.events.extend(self._pending_events)
@@ -979,6 +1059,9 @@ class Collector:
     def stop(self) -> None:
         """卸载 eBPF 程序并释放资源。"""
         self._stop_child_monitor()
+        if self._perf_backend is not None:
+            self._perf_backend.stop()
+            self._perf_backend = None
         if self._bpf is not None:
             self._poll_events()
             self._bpf.cleanup()

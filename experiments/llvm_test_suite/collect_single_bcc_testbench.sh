@@ -88,7 +88,7 @@ usage() {
   -O OUTPUT_DIR    固定输出目录；指定后不再自动追加时间戳
     -w WINDOW_SEC    loader 时间窗秒数，默认 1.0
     -d DURATION_SEC  本次采集总时长秒数，默认 60
-  -r SAMPLE_RATE   perf sample rate，默认 100
+    -r SAMPLE_RATE   perf sample period（每 N 次事件触发一次），默认 100
   -n               干跑：仅打印展开后的命令和 loader 调用
   -e               打开 --emit-events
   -l               打开 --lbr（隐含 emit-events）
@@ -251,12 +251,36 @@ start_record = start_rows[0]
 end_record = end_rows[0]
 run_id = start_record.get("run_id")
 
+try:
+    run_schema = json.loads(
+        (project_root / "export/schema/run_metadata.schema.json").read_text(encoding="utf-8")
+    )
+except OSError as exc:
+    fail(f"无法读取 run_metadata schema: {exc}")
+except json.JSONDecodeError as exc:
+    fail(f"run_metadata schema 不是合法 JSON: {exc.msg}")
+
+expected_run_schema_version = (
+    run_schema.get("properties", {})
+    .get("schema_version", {})
+    .get("const")
+)
+
 if not run_id:
     fail("start record 缺少 run_id")
 if end_record.get("run_id") != run_id:
     fail("start/end record 的 run_id 不一致")
-if start_record.get("schema_version") != "1.0" or end_record.get("schema_version") != "1.0":
-    fail("run_metadata 的 schema_version 非 1.0")
+if expected_run_schema_version is not None:
+    if (
+        start_record.get("schema_version") != expected_run_schema_version
+        or end_record.get("schema_version") != expected_run_schema_version
+    ):
+        fail(
+            "run_metadata 的 schema_version 不符合当前 schema，"
+            f"期望 {expected_run_schema_version!r}"
+        )
+elif start_record.get("schema_version") != end_record.get("schema_version"):
+    fail("start/end record 的 schema_version 不一致")
 if start_record.get("end_ts_iso") is not None:
     fail("start record 的 end_ts_iso 应为 null")
 if not start_record.get("start_ts_iso"):
@@ -277,9 +301,6 @@ except ImportError:
     jsonschema = None
 
 if jsonschema is not None:
-    run_schema = json.loads(
-        (project_root / "export/schema/run_metadata.schema.json").read_text(encoding="utf-8")
-    )
     window_schema = json.loads(
         (project_root / "export/schema/window_metrics.schema.json").read_text(encoding="utf-8")
     )

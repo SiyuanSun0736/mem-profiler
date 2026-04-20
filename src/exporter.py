@@ -32,7 +32,7 @@ class Exporter:
     enable_*    : 各类探针是否启用
     """
 
-    SCHEMA_VERSION = "1.0"
+    SCHEMA_VERSION = "2.0"
 
     def __init__(
         self,

@@ -68,101 +68,131 @@ def build_default_observations(
     enable_lbr: bool,
     scope: str,
     llc_store_via_generic: bool = False,
+    pmu_backend: str = "bcc",
 ) -> list[dict]:
     observations: list[ObservationSpec] = []
 
+    pmu_is_counting = pmu_backend == "perf_event_open"
+
+    def pmu_observation(
+        observation_id: str,
+        metrics: list[str],
+        perf_type: str,
+        perf_config: str,
+        notes: str,
+        group_id: str | None = None,
+        group_role: str | None = None,
+    ) -> ObservationSpec:
+        return ObservationSpec(
+            observation_id=observation_id,
+            kind="pmu_counting" if pmu_is_counting else "pmu_sampling",
+            backend="perf_event_open" if pmu_is_counting else "bcc_perf_event_raw",
+            metrics=metrics,
+            scope=scope,
+            sample_period=None if pmu_is_counting else sample_rate,
+            perf_type=perf_type,
+            perf_config=perf_config,
+            group_id=None if pmu_is_counting else group_id,
+            group_role=None if pmu_is_counting else group_role,
+            multiplex_mode="time_enabled_running" if pmu_is_counting else "opaque_backend",
+            scaling_fields=["time_enabled", "time_running"] if pmu_is_counting else None,
+            notes=notes,
+        )
+
     # cycles + instructions 是基础硬件计数器，始终采集，无开关
     observations.extend([
-        ObservationSpec(
+        pmu_observation(
             observation_id="pmu_cycles",
-            kind="pmu_sampling",
-            backend="bcc_perf_event_raw",
             metrics=["cycles"],
-            scope=scope,
-            sample_period=sample_rate,
             perf_type="hardware",
             perf_config="cpu_cycles",
             group_id="pmu_hw_base",
             group_role="leader",
-            multiplex_mode="opaque_backend",
-            notes="Accumulated via ctx->sample_period per handler invocation.",
+            notes=(
+                "Counted via perf_event_open fd reads; scaled with time_enabled/time_running."
+                if pmu_is_counting else
+                "Accumulated via ctx->sample_period per handler invocation."
+            ),
         ),
-        ObservationSpec(
+        pmu_observation(
             observation_id="pmu_instructions",
-            kind="pmu_sampling",
-            backend="bcc_perf_event_raw",
             metrics=["instructions"],
-            scope=scope,
-            sample_period=sample_rate,
             perf_type="hardware",
             perf_config="instructions",
             group_id="pmu_hw_base",
             group_role="member",
-            multiplex_mode="opaque_backend",
-            notes="Accumulated via ctx->sample_period per handler invocation.",
+            notes=(
+                "Counted via perf_event_open fd reads; scaled with time_enabled/time_running."
+                if pmu_is_counting else
+                "Accumulated via ctx->sample_period per handler invocation."
+            ),
         ),
     ])
 
     if enable_llc:
         observations.extend([
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_llc_load",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["llc_loads", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["llc_loads"] if pmu_is_counting else ["llc_loads", "samples"],
                 perf_type="hw_cache",
                 perf_config="ll.read.access",
                 group_id="pmu_cache",
-                multiplex_mode="opaque_backend",
+                notes=(
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running."
+                    if pmu_is_counting else
+                    "Accumulated via ctx->sample_period per handler invocation."
+                ),
             ),
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_llc_load_miss",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["llc_load_misses", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["llc_load_misses"] if pmu_is_counting else ["llc_load_misses", "samples"],
                 perf_type="hw_cache",
                 perf_config="ll.read.miss",
                 group_id="pmu_cache",
-                multiplex_mode="opaque_backend",
+                notes=(
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running."
+                    if pmu_is_counting else
+                    "Accumulated via ctx->sample_period per handler invocation."
+                ),
             ),
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_llc_store",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["llc_stores", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["llc_stores"] if pmu_is_counting else ["llc_stores", "samples"],
                 perf_type="hardware" if llc_store_via_generic else "hw_cache",
                 perf_config="cache_references" if llc_store_via_generic else "ll.write.access",
                 group_id="pmu_cache",
-                multiplex_mode="opaque_backend",
                 notes=(
+                    "Hardware does not support native LLC write counting on this CPU. "
+                    "Proxy: PERF_COUNT_HW_CACHE_REFERENCES (all LLC accesses). "
+                    "Counts are read via perf_event_open and scaled with time_enabled/time_running."
+                    if (llc_store_via_generic and pmu_is_counting) else
                     "Hardware does not support LLC write sampling (e.g. Intel Skylake). "
                     "Proxy: PERF_COUNT_HW_CACHE_REFERENCES (all LLC accesses). "
-                    "Field llc_stores approximates total LLC reference samples."
-                    if llc_store_via_generic else None
+                    "Field llc_stores approximates total LLC reference counts via ctx->sample_period accumulation."
+                    if llc_store_via_generic else
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running."
+                    if pmu_is_counting else
+                    "Accumulated via ctx->sample_period per handler invocation."
                 ),
             ),
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_llc_store_miss",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["llc_store_misses", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["llc_store_misses"] if pmu_is_counting else ["llc_store_misses", "samples"],
                 perf_type="hardware" if llc_store_via_generic else "hw_cache",
                 perf_config="cache_misses" if llc_store_via_generic else "ll.write.miss",
                 group_id="pmu_cache",
-                multiplex_mode="opaque_backend",
                 notes=(
+                    "Hardware does not support native LLC write-miss counting on this CPU. "
+                    "Proxy: PERF_COUNT_HW_CACHE_MISSES (all LLC misses). "
+                    "Counts are read via perf_event_open and scaled with time_enabled/time_running."
+                    if (llc_store_via_generic and pmu_is_counting) else
                     "Hardware does not support LLC write miss sampling (e.g. Intel Skylake). "
                     "Proxy: PERF_COUNT_HW_CACHE_MISSES (all LLC misses). "
-                    "Field llc_store_misses approximates total LLC miss samples."
-                    if llc_store_via_generic else (
+                    "Field llc_store_misses approximates total LLC miss counts via ctx->sample_period accumulation."
+                    if llc_store_via_generic else
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running."
+                    if pmu_is_counting else (
+                        "Accumulated via ctx->sample_period per handler invocation. "
                         "BCC raw perf_event attach does not expose time_enabled/time_running, "
                         "so per-window multiplex scaling quality is not exported."
                     )
@@ -172,69 +202,70 @@ def build_default_observations(
 
     if enable_dtlb:
         observations.extend([
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_dtlb_load",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["dtlb_loads", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["dtlb_loads"] if pmu_is_counting else ["dtlb_loads", "samples"],
                 perf_type="hw_cache",
                 perf_config="dtlb.read.access",
                 group_id="pmu_dtlb",
-                multiplex_mode="opaque_backend",
+                notes=(
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running."
+                    if pmu_is_counting else
+                    "Accumulated via ctx->sample_period per handler invocation."
+                ),
             ),
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_dtlb_load_miss",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["dtlb_load_misses", "dtlb_misses", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["dtlb_load_misses", "dtlb_misses"] if pmu_is_counting else ["dtlb_load_misses", "dtlb_misses", "samples"],
                 perf_type="hw_cache",
                 perf_config="dtlb.read.miss",
                 group_id="pmu_dtlb",
-                multiplex_mode="opaque_backend",
+                notes=(
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running; contributes to dtlb_misses."
+                    if pmu_is_counting else
+                    "Accumulated via ctx->sample_period per handler invocation; contributes to dtlb_misses."
+                ),
             ),
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_dtlb_store",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["dtlb_stores", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["dtlb_stores"] if pmu_is_counting else ["dtlb_stores", "samples"],
                 perf_type="hw_cache",
                 perf_config="dtlb.write.access",
                 group_id="pmu_dtlb",
-                multiplex_mode="opaque_backend",
+                notes=(
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running."
+                    if pmu_is_counting else
+                    "Accumulated via ctx->sample_period per handler invocation."
+                ),
             ),
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_dtlb_store_miss",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["dtlb_store_misses", "dtlb_misses", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["dtlb_store_misses", "dtlb_misses"] if pmu_is_counting else ["dtlb_store_misses", "dtlb_misses", "samples"],
                 perf_type="hw_cache",
                 perf_config="dtlb.write.miss",
                 group_id="pmu_dtlb",
-                multiplex_mode="opaque_backend",
+                notes=(
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running; contributes to dtlb_misses."
+                    if pmu_is_counting else
+                    "Accumulated via ctx->sample_period per handler invocation; contributes to dtlb_misses."
+                ),
             ),
         ])
 
     if enable_itlb:
         observations.append(
-            ObservationSpec(
+            pmu_observation(
                 observation_id="pmu_itlb_load_miss",
-                kind="pmu_sampling",
-                backend="bcc_perf_event_raw",
-                metrics=["itlb_load_misses", "samples"],
-                scope=scope,
-                sample_period=sample_rate,
+                metrics=["itlb_load_misses"] if pmu_is_counting else ["itlb_load_misses", "samples"],
                 perf_type="hw_cache",
                 perf_config="itlb.read.miss",
-                multiplex_mode="opaque_backend",
-                notes="Attached as independent event; itlb.read.access is not supported on this CPU.",
+                notes=(
+                    "Counted via perf_event_open fd reads; scaled with time_enabled/time_running. "
+                    "Attached as an independent counter; itlb.read.access is not supported on this CPU."
+                    if pmu_is_counting else
+                    "Accumulated via ctx->sample_period per handler invocation. "
+                    "Attached as independent event; itlb.read.access is not supported on this CPU."
+                ),
             )
         )
 

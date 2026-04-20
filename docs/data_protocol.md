@@ -1,6 +1,6 @@
 # 数据协议（Data Protocol）
 
-> 版本：1.0  
+> 版本：2.0  
 > 文件格式：JSON Lines（每行一个 JSON 对象，UTF-8 编码，`.jsonl` 扩展名）
 
 本文档定义 `ebpf-mem-profiler` 与下游消费方（包括 `ebpf-mem-analyzer` 基线仓库）之间的稳定数据接口。  
@@ -30,7 +30,7 @@ data/run_001/
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `schema_version` | `"1.0"` | 协议版本，用于兼容性检查 |
+| `schema_version` | `"2.0"` | 协议版本，用于兼容性检查 |
 | `run_id` | string (UUID v4) | 本次运行唯一标识，与 `window_metrics.jsonl` 关联 |
 | `start_ts_iso` | string (ISO 8601) | 采集开始时间 |
 | `end_ts_iso` | null | 运行中为 null，结束后由 end record 携带 |
@@ -39,9 +39,9 @@ data/run_001/
 | `target_comm` | string | 目标进程名（通过 `--comm` 指定时填入） |
 | `aggregation_scope` | string | `per_pid` 或 `per_tid` |
 | `window_sec` | number | 时间窗大小（秒） |
-| `sample_rate` | integer | perf 采样比 |
-| `collection_backend` | string | 当前采集后端，例如 `bcc`、`perf_event_open`、`libbpf` |
-| `enabled_probes` | object | `{ llc: bool, dtlb: bool, fault: bool, lbr: bool }` |
+| `sample_rate` | integer | 兼容旧 CLI 名称；实际语义是 perf sample_period（每 N 次事件触发一次） |
+| `collection_backend` | string | 当前采集后端，例如 `bcc`、`perf_event_open`、`hybrid_perf_event_open_bcc`、`libbpf` |
+| `enabled_probes` | object | `{ llc: bool, dtlb: bool, itlb: bool, fault: bool, lbr: bool }` |
 | `observations` | array<object> | 本次运行启用的观测项定义；用于表达 PMU grouping、multiplex 处理方式以及未来的 LBR 接入点 |
 | `host_info` | object | `{ hostname, kernel_version, cpu_model, num_cpus }` |
 
@@ -49,7 +49,7 @@ data/run_001/
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `schema_version` | `"1.0"` | |
+| `schema_version` | `"2.0"` | |
 | `run_id` | string | 与 start record 相同 |
 | `end_ts_iso` | string (ISO 8601) | 采集结束时间 |
 | `_record_type` | `"run_end"` | 标识这是 end record |
@@ -57,8 +57,8 @@ data/run_001/
 ### 示例
 
 ```jsonl
-{"schema_version":"1.0","run_id":"a1b2c3d4-...","start_ts_iso":"2026-04-14T10:00:00+00:00","end_ts_iso":null,"target_pid":1234,"target_tid":0,"target_comm":"nginx","aggregation_scope":"per_tid","window_sec":1.0,"sample_rate":100,"collection_backend":"bcc","enabled_probes":{"llc":true,"dtlb":true,"fault":true,"lbr":true},"observations":[{"observation_id":"pmu_llc_load_miss","kind":"pmu_sampling","backend":"bcc_perf_event_raw","metrics":["llc_load_misses","samples"],"scope":"per_tid","sample_period":100,"perf_event":{"type":"hw_cache","config":"ll.read.miss"},"group":{"id":"pmu_cache"},"multiplex":{"mode":"opaque_backend","scaling_fields":[]}}],"host_info":{"hostname":"dev01","kernel_version":"6.8.0","cpu_model":"Intel Core i7-12700","num_cpus":20}}
-{"schema_version":"1.0","run_id":"a1b2c3d4-...","end_ts_iso":"2026-04-14T10:01:05+00:00","_record_type":"run_end"}
+{"schema_version":"2.0","run_id":"a1b2c3d4-...","start_ts_iso":"2026-04-14T10:00:00+00:00","end_ts_iso":null,"target_pid":1234,"target_tid":0,"target_comm":"nginx","aggregation_scope":"per_tid","window_sec":1.0,"sample_rate":100,"collection_backend":"bcc","enabled_probes":{"llc":true,"dtlb":true,"itlb":true,"fault":true,"lbr":true},"observations":[{"observation_id":"pmu_llc_load_miss","kind":"pmu_sampling","backend":"bcc_perf_event_raw","metrics":["llc_load_misses","samples"],"scope":"per_tid","sample_period":100,"perf_event":{"type":"hw_cache","config":"ll.read.miss"},"group":{"id":"pmu_cache"},"multiplex":{"mode":"opaque_backend","scaling_fields":[]},"notes":"Accumulated via ctx->sample_period per handler invocation."}],"host_info":{"hostname":"dev01","kernel_version":"6.8.0","cpu_model":"Intel Core i7-12700","num_cpus":20}}
+{"schema_version":"2.0","run_id":"a1b2c3d4-...","end_ts_iso":"2026-04-14T10:01:05+00:00","_record_type":"run_end"}
 ```
 
 ### `observations[]` 对象
@@ -68,7 +68,7 @@ data/run_001/
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `observation_id` | string | 观测项唯一标识，例如 `pmu_llc_load_miss` |
-| `kind` | string | 观测源类别，例如 `pmu_sampling`、`trace_hook`、`lbr_sampling` |
+| `kind` | string | 观测源类别，例如 `pmu_sampling`、`pmu_counting`、`trace_hook`、`lbr_sampling` |
 | `backend` | string | 具体后端，例如 `bcc_perf_event`、`perf_event_open` |
 | `metrics` | array<string> | 该观测项最终贡献到哪些输出字段 |
 | `scope` | string | 采集粒度，例如 `per_pid`、`per_tid` |
@@ -93,9 +93,17 @@ data/run_001/
 
 **所有计数字段均为差分值**（本窗口内的增量，而非累积值）。
 
+说明：
+
+- `cycles`、`instructions`、LLC、dTLB、iTLB 等 PMU 字段的具体语义由 `observations[]` 中对应 observation 的 backend 决定。
+- 当 PMU backend 为 `bcc_perf_event_raw` 时，字段为近似事件计数，通过每次 handler 触发时累加 `ctx->sample_period` 得到。
+- 当 PMU backend 为 `perf_event_open` 时，字段来自用户态定期读取 perf fd 的累计计数，并按 `time_enabled/time_running` 做缩放。
+- `samples` 仍表示 eBPF handler 的触发次数，也就是采样命中数，而不是放大后的近似事件总数。
+- `minor_faults` / `major_faults` 来自 trace hook，表示实际 fault 次数，不经过 `sample_period` 放大。
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `schema_version` | `"1.0"` | |
+| `schema_version` | `"2.0"` | |
 | `run_id` | string | 对应 `run_metadata.jsonl` 中的 `run_id` |
 | `window_id` | integer ≥ 0 | 单调递增窗口序号，第一个窗口为 0 |
 | `start_ns` | integer | 窗口起始时间戳（CLOCK_MONOTONIC，纳秒） |
@@ -104,18 +112,18 @@ data/run_001/
 | `pid` | integer | 进程 ID |
 | `tid` | integer | 线程 ID；仅 `entity_scope = "tid"` 时出现 |
 | `comm` | string | 进程名 |
-| `llc_loads` | integer ≥ 0 | 本窗口 LLC load access 采样计数 |
-| `llc_load_misses` | integer ≥ 0 | 本窗口 LLC load miss 采样计数 |
-| `llc_stores` | integer ≥ 0 | 本窗口 LLC store access 采样计数 |
-| `llc_store_misses` | integer ≥ 0 | 本窗口 LLC store miss 采样计数 |
-| `dtlb_loads` | integer ≥ 0 | 本窗口 dTLB load access 采样计数 |
-| `dtlb_load_misses` | integer ≥ 0 | 本窗口 dTLB load miss 采样计数 |
-| `dtlb_stores` | integer ≥ 0 | 本窗口 dTLB store access 采样计数 |
-| `dtlb_store_misses` | integer ≥ 0 | 本窗口 dTLB store miss 采样计数 |
-| `dtlb_misses` | integer ≥ 0 | 本窗口 dTLB load miss 采样计数 |
-| `itlb_load_misses` | integer ≥ 0 | 本窗口 iTLB load miss 采样计数 |
-| `cycles` | integer ≥ 0 | 本窗口 CPU cycles 近似计数（sample_period 累加） |
-| `instructions` | integer ≥ 0 | 本窗口 retired instructions 近似计数（sample_period 累加） |
+| `llc_loads` | integer ≥ 0 | 本窗口 LLC load access 计数；具体来源由 observation backend 决定 |
+| `llc_load_misses` | integer ≥ 0 | 本窗口 LLC load miss 计数；具体来源由 observation backend 决定 |
+| `llc_stores` | integer ≥ 0 | 本窗口 LLC store access 计数；具体来源由 observation backend 决定 |
+| `llc_store_misses` | integer ≥ 0 | 本窗口 LLC store miss 计数；具体来源由 observation backend 决定 |
+| `dtlb_loads` | integer ≥ 0 | 本窗口 dTLB load access 计数；具体来源由 observation backend 决定 |
+| `dtlb_load_misses` | integer ≥ 0 | 本窗口 dTLB load miss 计数；具体来源由 observation backend 决定 |
+| `dtlb_stores` | integer ≥ 0 | 本窗口 dTLB store access 计数；具体来源由 observation backend 决定 |
+| `dtlb_store_misses` | integer ≥ 0 | 本窗口 dTLB store miss 计数；具体来源由 observation backend 决定 |
+| `dtlb_misses` | integer ≥ 0 | 本窗口 dTLB load/store miss 总计数；具体来源由 observation backend 决定 |
+| `itlb_load_misses` | integer ≥ 0 | 本窗口 iTLB load miss 计数；具体来源由 observation backend 决定 |
+| `cycles` | integer ≥ 0 | 本窗口 CPU cycles 计数；具体来源由 observation backend 决定 |
+| `instructions` | integer ≥ 0 | 本窗口 retired instructions 计数；具体来源由 observation backend 决定 |
 | `minor_faults` | integer ≥ 0 | 本窗口 minor page fault 次数 |
 | `major_faults` | integer ≥ 0 | 本窗口 major page fault 次数 |
 | `lbr_samples` | integer ≥ 0 | 本窗口 LBR 分支栈样本数 |
@@ -125,7 +133,7 @@ data/run_001/
 ### 示例
 
 ```jsonl
-{"schema_version":"1.0","run_id":"a1b2c3d4-...","window_id":0,"start_ns":1000000000,"end_ns":1001000000000,"entity_scope":"tid","pid":1234,"tid":1239,"comm":"nginx","llc_loads":9812,"llc_load_misses":4521,"llc_stores":2088,"llc_store_misses":102,"dtlb_loads":330,"dtlb_load_misses":89,"dtlb_stores":74,"dtlb_store_misses":11,"dtlb_misses":100,"itlb_loads":55,"itlb_load_misses":7,"minor_faults":12,"major_faults":0,"lbr_samples":45,"lbr_entries":318,"samples":4723}
+{"schema_version":"2.0","run_id":"a1b2c3d4-...","window_id":0,"start_ns":1000000000,"end_ns":1001000000000,"entity_scope":"tid","pid":1234,"tid":1239,"comm":"nginx","llc_loads":981200,"llc_load_misses":452100,"llc_stores":208800,"llc_store_misses":10200,"dtlb_loads":33000,"dtlb_load_misses":8900,"dtlb_stores":7400,"dtlb_store_misses":1100,"dtlb_misses":10000,"itlb_load_misses":700,"cycles":6103200,"instructions":5862600,"minor_faults":12,"major_faults":0,"lbr_samples":45,"lbr_entries":318,"samples":4723}
 ```
 
 ---
@@ -135,9 +143,11 @@ data/run_001/
 仅在采集时指定 `--emit-events` 时生成，记录每个被采样事件的详细信息。  
 适用于函数级归因（P2 阶段）。
 
+说明：`events.jsonl` 仍是一条采样命中对应一条记录，不会按 `sample_period` 放大。
+
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `schema_version` | `"1.0"` | |
+| `schema_version` | `"2.0"` | |
 | `run_id` | string | |
 | `ts_ns` | integer | 事件时间戳 |
 | `pid` | integer | |

@@ -42,7 +42,7 @@
 #   PYTHON_BIN        Python 可执行文件（默认 python3）
 #   WINDOW_SEC        loader 时间窗大小，秒（默认 1.0）
 #   DURATION_SEC      单次采集总时长，秒（默认 60）
-#   SAMPLE_RATE       perf sample rate（默认 100）
+#   SAMPLE_RATE       perf sample period（默认 100；每 N 次事件触发一次）
 #   BENCH_FILTER      只采集指定基准名称（留空=全部）
 #   OVERWRITE         1=总是重新采集，0=已有成功输出则跳过（默认 1）
 #   RETRY_MAX         每个基准最多重试次数（默认 2）
@@ -114,7 +114,7 @@ usage() {
     -d OUTPUT_ROOT   BCC 输出根目录
     -w DURATION_SEC  单次采集总时长，秒（默认 60）
   -i WINDOW_SEC    loader 时间窗，秒（默认 1.0）
-  -r SAMPLE_RATE   perf sample rate（默认 100）
+    -r SAMPLE_RATE   perf sample period（默认 100；每 N 次事件触发一次）
   -s BENCH         只采集指定 benchmark
   -n               DRYRUN 模式
   -e               打开 --emit-events

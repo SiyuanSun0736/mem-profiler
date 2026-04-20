@@ -42,7 +42,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--duration",     type=int,   default=0,
                    help="采集总时长（秒），0 = 手动 Ctrl-C 停止")
     p.add_argument("--sample-rate",  type=int,   default=100,
-                   help="硬件 perf 采样率（每 N 次事件触发一次 eBPF），默认 100")
+                   help="采样型 probe 的 perf sample_period；当前主要影响 LBR 和 legacy BCC PMU backend，默认 100")
+    p.add_argument(
+        "--pmu-backend",
+        type=str,
+        default="auto",
+        choices=["auto", "perf_event_open", "bcc"],
+        help="PMU 指标后端：auto 优先 perf_event_open 真计数，失败时回退到 BCC sampling",
+    )
     p.add_argument("--emit-events",  action="store_true",
                    help="同时向 ring buffer 写入逐事件记录（大采样量时会增加开销）")
     p.add_argument("--tid",          type=int, default=0,
@@ -60,7 +67,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "追踪目标进程的子进程和子线程（仅对 --pid 模式有效）。\n"
-            "LLC/dTLB/iTLB: perf_event inherit=1，内核自动继承。\n"
+            "PMU 真计数后端会轮询 /proc 并为匹配线程打开 perf_event_open 计数器。\n"
+            "legacy BCC PMU backend 则依赖 perf_event inherit=1。\n"
             "LBR: 硬件限制不支持 inherit，轮切为 pid=-1 全局挂载 + eBPF child_pid_set 过滤。\n"
             "page fault kprobe: 已是全局探针，内核 child_pid_set 控制过滤。"
         ),
@@ -107,7 +115,21 @@ def main() -> None:
         enable_lbr=args.lbr,
         per_tid=args.per_tid,
         track_children=args.track_children,
+        pmu_backend=args.pmu_backend,
     )
+
+    exporter = None
+
+    stop_flag = [False]
+
+    def _on_signal(sig, frame):  # noqa: ANN001
+        stop_flag[0] = True
+
+    signal.signal(signal.SIGINT,  _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+
+    print(f"[info] 开始采集 → {out_dir}  (Ctrl-C 停止)", flush=True)
+    collector.start()
 
     exporter = Exporter(
         out_dir=out_dir,
@@ -124,19 +146,8 @@ def main() -> None:
         enable_lbr=args.lbr,
         aggregation_scope="per_tid" if (args.per_tid or args.tid > 0) else "per_pid",
         observations=collector.describe_observations(),
-        collection_backend="bcc",
+        collection_backend=collector.describe_collection_backend(),
     )
-
-    stop_flag = [False]
-
-    def _on_signal(sig, frame):  # noqa: ANN001
-        stop_flag[0] = True
-
-    signal.signal(signal.SIGINT,  _on_signal)
-    signal.signal(signal.SIGTERM, _on_signal)
-
-    print(f"[info] 开始采集 → {out_dir}  (Ctrl-C 停止)", flush=True)
-    collector.start()
 
     deadline = (time.monotonic() + args.duration) if args.duration > 0 else float("inf")
     window_id = 0
@@ -153,7 +164,8 @@ def main() -> None:
             )
     finally:
         collector.stop()
-        exporter.flush_and_close()
+        if exporter is not None:
+            exporter.flush_and_close()
         print(
             f"[info] 采集结束，共 {window_id} 个时间窗，数据已保存至 {out_dir}",
             flush=True,
