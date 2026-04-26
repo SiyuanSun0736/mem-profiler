@@ -1,10 +1,10 @@
 """
 exporter.py — 将采集结果写入 JSONL 文件
 
-输出三类文件（见 docs/data_protocol.md）：
-  • run_metadata.jsonl     — 每次运行一条元信息记录
-  • window_metrics.jsonl   — 每个时间窗每个 PID 一条记录
-  • events.jsonl           — 逐事件记录（仅在 emit_events=True 时生成，暂留接口）
+输出三类文件：
+    • run_metadata.jsonl     — 每次运行一条元信息记录
+    • window_metrics.jsonl   — 每个时间窗每个 PID 一条记录
+    • events.jsonl           — 逐事件记录（仅在 emit_events=True 时生成，暂留接口）
 
 所有文件使用 JSON Lines 格式（每行一个 JSON 对象），便于 pandas/jq 处理。
 """
@@ -32,8 +32,6 @@ class Exporter:
     enable_*    : 各类探针是否启用
     """
 
-    SCHEMA_VERSION = "2.0"
-
     def __init__(
         self,
         out_dir:      pathlib.Path,
@@ -51,7 +49,6 @@ class Exporter:
         enable_lbr:   bool  = False,
         enable_mm_syscalls: bool = True,
         aggregation_scope: str = "per_pid",
-        observations: Optional[list[dict]] = None,
         collection_backend: str = "bcc",
     ) -> None:
         self._out   = out_dir
@@ -68,7 +65,6 @@ class Exporter:
 
         # 写入本次运行的元信息
         meta = {
-            "schema_version": self.SCHEMA_VERSION,
             "run_id":         self._run_id,
             "start_ts_iso":   self._start_iso,
             "end_ts_iso":     None,
@@ -88,7 +84,6 @@ class Exporter:
                 "mm_syscalls":          enable_mm_syscalls,
             },
             "collection_backend": collection_backend,
-            "observations": observations or [],
             "host_info": {
                 "hostname":       socket.gethostname(),
                 "kernel_version": platform.release(),
@@ -104,14 +99,14 @@ class Exporter:
     def write_window(self, snap: WindowSnapshot) -> None:
         """将一个时间窗的聚合记录和逐事件记录追加写入 JSONL。"""
         for entry in snap.entries:
-            row = {"schema_version": self.SCHEMA_VERSION, "run_id": self._run_id}
+            row = {"run_id": self._run_id}
             row.update(entry)
             self._window_f.write(json.dumps(row, ensure_ascii=False) + "\n")
         self._window_f.flush()
 
         if self._events_f is not None:
             for event in snap.events:
-                row = {"schema_version": self.SCHEMA_VERSION, "run_id": self._run_id}
+                row = {"run_id": self._run_id}
                 row.update(event)
                 self._events_f.write(json.dumps(row, ensure_ascii=False) + "\n")
             self._events_f.flush()
@@ -124,7 +119,6 @@ class Exporter:
 
         # 追加一条 end 记录（简化处理；实际可用 patch-in-place）
         end_rec = {
-            "schema_version": self.SCHEMA_VERSION,
             "run_id":         self._run_id,
             "end_ts_iso":     end_iso,
             "_record_type":   "run_end",

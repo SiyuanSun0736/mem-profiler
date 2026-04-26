@@ -16,10 +16,7 @@
 | `ebpf-mem-profiler`（本库） | eBPF 采集 · 细粒度指标提取 · 归因分析 · 方法学验证 | 题目主线 |
 | `ebpf-mem-analyzer` | PMU/LBR 相对性能预测 · Siamese 模型 · 已有实验结论 | 基线子项目 |
 
-两个仓库通过**稳定数据接口**（`window_metrics.jsonl`）连接，**不共享代码实现**。
-
-为兼容未来的 PMU 分组读取和 LBR 接入，运行元信息层允许携带 `observations[]` 描述；
-它用于表达“观测项如何被采集”，而 `window_metrics.jsonl` 继续表达“最终聚合出了什么指标”。
+两个仓库通过 `window_metrics.jsonl` 和导出 CSV 弱连接，**不共享代码实现**。
 
 ---
 
@@ -56,7 +53,6 @@
 ┌──────────────────────▼──────────────────────────┐
 │                  导出 / 对接层                    │
 │  export/to_baseline.py  （格式转换适配器）        │
-│  export/schema/         （JSON Schema 定义）      │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -79,7 +75,7 @@
 ### P0（当前）：边界定义与仓库初始化
 
 - [x] 确定目录结构和模块分工
-- [x] 定义数据协议（docs/data_protocol.md）
+- [x] 确定最小输出文件集合
 - [x] 创建所有核心文件骨架
 
 ### P1：最小可用 eBPF 原型
@@ -127,7 +123,7 @@
 
 4. **内核版本**：ring buffer（`BPF_MAP_TYPE_RINGBUF`）需要 Linux >= 5.8；`PERCPU_HASH` 差分逻辑需要 >= 5.2。
 
-5. **PMU multiplex / grouping 可见性**：当前 BCC 原型不能导出 `time_enabled/time_running` 或 group leader 联读结果，因此只能在 `run_metadata.jsonl` 的 `observations[]` 中声明策略，不能逐窗口证明缩放质量。若要严肃接入 LBR 或做成组 PMU 统计，应迁移到 `perf_event_open`/libbpf 后端。
+5. **PMU multiplex / grouping 可见性**：当前 BCC 原型不能导出 `time_enabled/time_running` 或 group leader 联读结果，因此无法逐窗口证明缩放质量。若要严肃接入 LBR 或做成组 PMU 统计，应迁移到 `perf_event_open`/libbpf 后端。
 
 ---
 

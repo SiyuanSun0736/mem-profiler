@@ -16,9 +16,9 @@
 | 函数级热点归因 | 符号化采样地址 → 函数 / 文件 / 行号（P2 阶段） |
 | 分析报告生成 | 时序图、热点条形图、指标相关性热力图（matplotlib PDF） |
 | 测量方法学验证 | 采集开销 / 重复稳定性 / 参数敏感性 / 微基准校验实验 |
-| 基线对接 | `export/to_baseline.py` 将输出格式转换为 [ebpf-mem-analyzer](../ebpf-mem-analyzer) 可消费的 CSV |
+| 基线对接 | `export/to_baseline.py` 将窗口指标转换为 [ebpf-mem-analyzer](../ebpf-mem-analyzer) 可消费的 CSV |
 
-与 `ebpf-mem-analyzer` 的关系：两者通过[数据协议](docs/data_protocol.md)对接，**不共享代码**，互不破坏各自的实验结论。
+与 `ebpf-mem-analyzer` 的关系：两者通过 `window_metrics.jsonl` 和 CSV 转换脚本弱连接，**不共享代码**，互不破坏各自的实验结论。
 
 ---
 
@@ -41,7 +41,6 @@ ebpf-mem-profiler/
 │   ├── attribution.py          # 函数级归因（P2，需 --emit-events）
 │   └── report.py               # matplotlib 图表生成
 ├── export/
-│   ├── schema/                 # JSON Schema（run_metadata / window_metrics / hotspot_summary）
 │   └── to_baseline.py          # 格式转换适配器
 ├── experiments/
 │   ├── llvm_test_suite/       # llvm-test-suite 提取与 PMU 采集脚本
@@ -54,7 +53,6 @@ ebpf-mem-profiler/
 ├── data/                       # 原始采集数据（gitignore）
 ├── results/                    # 分析结果与图表（gitignore）
 ├── docs/
-│   ├── data_protocol.md        # 数据协议文档
 │   └── design.md               # 系统设计文档
 ├── Makefile                    # 编译 CO-RE eBPF 程序
 └── requirements.txt            # Python 依赖
@@ -296,7 +294,7 @@ sudo bash experiments/micro_benchmark/run_micro_bench.sh
 
 | 阶段 | 目标 | 状态 |
 |------|------|------|
-| **P0** | 边界定义 · 目录结构 · 数据协议 | ✅ 完成 |
+| **P0** | 边界定义 · 目录结构 · 最小输出链路 | ✅ 完成 |
 | **P1** | 最小可用 eBPF 原型（稳定 attach · PID 过滤 · 时间窗落盘） | 🔲 待验证 |
 | **P2** | 函数级热点归因 | 🔲 待开发 |
 | **P3** | 测量方法学验证实验 | 🔲 待开发 |
@@ -304,11 +302,9 @@ sudo bash experiments/micro_benchmark/run_micro_bench.sh
 
 ---
 
-## 数据协议
+## 核心输出文件
 
-详见 [docs/data_protocol.md](docs/data_protocol.md)。
-
-核心接口文件：
+当前主输出文件：
 - `window_metrics.jsonl`：时间窗级聚合指标（主要数据文件）
 - `run_metadata.jsonl`：采集 session 元信息
 - `hotspot_summary.jsonl`：热点摘要（analysis/ 脚本产出）

@@ -20,7 +20,6 @@ from typing import Any, Optional
 # perf_event_attr.flags 中表示 inherit 的永久位置（kernel 规范：踤足 0=disabled, 1=inherit …）
 _PERF_ATTR_FLAG_INHERIT: int = 1 << 1
 
-from observations import build_default_observations
 from perf_counter import PerfCounterBackend, PerfCounterSnapshot
 
 _BCC_PROG_PATH = pathlib.Path(__file__).parent / "bcc_prog.c"
@@ -372,8 +371,6 @@ class Collector:
         # track_children 只在指定了具体 target_pid 时才生效；
         # comm 模式本就是全局采样，子进程总能被内核防弹层捕获。
         self.track_children: bool = track_children and (target_pid > 0)
-        self._observations: list[dict] = []
-        self._refresh_observations()
         self._stale_entity_timeout_ns = max(
             int(self.window_sec * _STALE_ENTITY_WINDOW_MULTIPLIER * 1e9),
             _MIN_STALE_ENTITY_TIMEOUT_NS,
@@ -390,21 +387,6 @@ class Collector:
         self._child_monitor_lock: threading.Lock = threading.Lock()
         self._child_monitor_stop: Optional[threading.Event] = None
         self._child_monitor_thread: Optional[threading.Thread] = None
-
-    def _refresh_observations(self) -> None:
-        self._observations = build_default_observations(
-            sample_rate=self.sample_rate,
-            enable_llc=self.enable_llc,
-            enable_dtlb=self.enable_dtlb,
-            enable_itlb=self.enable_itlb,
-            enable_fault=self.enable_fault,
-            enable_fault_classification=self.enable_fault_classification,
-            enable_lbr=self.enable_lbr,
-            enable_mm_syscalls=self.enable_mm_syscalls,
-            scope="per_tid" if self.per_tid else "per_pid",
-            llc_store_via_generic=self._llc_store_via_generic,
-            pmu_backend="bcc" if self._use_bcc_pmu else "perf_event_open",
-        )
 
     def describe_collection_backend(self) -> str:
         if self._use_bcc_pmu:
@@ -763,8 +745,6 @@ class Collector:
         else:
             self._use_bcc_pmu = True
 
-        self._refresh_observations()
-
         if self._use_bcc_pmu:
             # ── cycles + instructions group ─────────────────────────────────
             # These are fundamental hardware counters used to derive IPC and
@@ -887,8 +867,6 @@ class Collector:
                         "cache-misses [LLC store miss proxy]",
                     ),
                 ], inherit=self.track_children)
-                self._refresh_observations()
-
         if self.enable_dtlb and self._use_bcc_pmu:
             # PMU hardware typically provides 4 programmable counters.
             # A single group must not exceed 4 events or the kernel will
@@ -1006,9 +984,6 @@ class Collector:
         if self.track_children and (self.enable_fault or self.enable_lbr or self.enable_mm_syscalls):
             print(f"[info] track_children 已开启，启动子进程监控线程", flush=True)
             self._start_child_monitor()
-
-    def describe_observations(self) -> list[dict]:
-        return list(self._observations)
 
     def _prune_stale_entities(
         self,

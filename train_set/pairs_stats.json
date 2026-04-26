@@ -1,0 +1,21 @@
+{
+  "n_pairs": 1740,
+  "n_programs": 145,
+  "feature_dim": 54,
+  "input_dim": 162,
+  "tie_threshold": 0.05,
+  "label_counts": {
+    "j_better": 681,
+    "i_better": 681,
+    "tie": 378
+  },
+  "log_ratio_stats": {
+    "mean": 0.0,
+    "std": 2.3092,
+    "min": -14.7822,
+    "max": 14.7822,
+    "p25": -0.599,
+    "median": 0.0,
+    "p75": 0.599
+  }
+}

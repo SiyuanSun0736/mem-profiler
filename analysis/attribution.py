@@ -148,7 +148,6 @@ def main() -> None:
     with open(out_f, "a", encoding="utf-8") as f:
         for _, row in df.iterrows():
             rec = {
-                "schema_version": "1.0",
                 "pid":            args.pid,
                 "symbol":         row["func"],
                 "dso":            row["dso"],

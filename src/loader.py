@@ -159,7 +159,6 @@ def main() -> None:
         enable_lbr=args.lbr,
         enable_mm_syscalls=not args.no_mm_syscalls,
         aggregation_scope="per_tid" if (args.per_tid or args.tid > 0) else "per_pid",
-        observations=collector.describe_observations(),
         collection_backend=collector.describe_collection_backend(),
     )
 

@@ -1,54 +1,75 @@
-# 新仓库方案总览
+# 新方案总览
 
-> 状态：草稿  
-> 目标：把“不同访存布局程序的优化程度判别”拆成可直接执行的研究与工程方案
+> 状态：已按现有真实数据重设计；截至 2026-04-26，方案不再围绕“未来布局基准”，而是围绕已经拿到的 llvm-test-suite O0/O1/O2/O3 数据集展开  
+> 目标：把现有 BCC 数据沉淀成一个可验证、可扩展的优化级别代理任务方案
 
-本文档集服务于一个从零开始的新仓库。新仓库不继承当前仓库的数据格式、训练脚本和实验口径，只借鉴两类经验：
+本文档集不再从“理想中的新数据集”反推设计，而是从当前已经存在的数据出发，回答三个更现实的问题：
 
-1. 当前仓库在采集与分析上的工程分层。
-2. 旧模型仓库在成对比较和 Siamese 架构上的任务设计。
+1. 这批数据到底支持什么任务。
+2. 现有模型结果说明了什么。
+3. 下一步应该优先补哪些实验和特征，而不是先重做采集体系。
 
-新仓库的主问题固定为：
+当前方案的主问题改写为：
 
-“针对同一程序的不同访存布局版本，采集时间与非时间运行时信号，建立优化程度判别模型，并与纯时间判断进行对照验证。”
+“在 llvm-test-suite 的 O0/O1/O2/O3 固定工作量代理数据上，非时间运行时摘要特征能否恢复优化级别的相对优劣，并进一步支撑单程序评分与弱诊断输出。”
 
 ## 文档导航
 
-1. [01-scope-and-goals.md](01-scope-and-goals.md)：研究边界、核心问题、成功标准。
-2. [02-data-design.md](02-data-design.md)：数据协议、样本组织、字段设计、派生标签。
-3. [03-experiment-design.md](03-experiment-design.md)：实验矩阵、对照设置、评估指标。
-4. [04-model-plan.md](04-model-plan.md)：模型分阶段路线，包含对旧 Siamese 架构的继承与裁剪。
-5. [05-implementation-roadmap.md](05-implementation-roadmap.md)：仓库结构、里程碑、交付物、验收标准。
+1. [01-scope-and-goals.md](01-scope-and-goals.md)：这批数据能回答什么，不能回答什么。
+2. [02-data-design.md](02-data-design.md)：现有数据快照、样本单位、标签设计、特征设计。
+3. [03-experiment-design.md](03-experiment-design.md)：基于现有数据应做哪些实验，哪些暂时不该做。
+4. [04-model-plan.md](04-model-plan.md)：围绕现有 `run_features` / `pairs` / `anchor_set` 的模型路线。
+5. [05-implementation-roadmap.md](05-implementation-roadmap.md)：按现有脚本和产物重排里程碑与下一步任务。
 
 ## 推荐阅读顺序
 
-如果你的目标是先把题目和边界定死，先读 [01-scope-and-goals.md](01-scope-and-goals.md) 和 [03-experiment-design.md](03-experiment-design.md)。
+如果你的目标是先把这批数据的边界说清楚，先读 [01-scope-and-goals.md](01-scope-and-goals.md) 和 [02-data-design.md](02-data-design.md)。
 
-如果你的目标是尽快开工，先读 [02-data-design.md](02-data-design.md) 和 [05-implementation-roadmap.md](05-implementation-roadmap.md)。
+如果你的目标是立刻继续做实验，先读 [03-experiment-design.md](03-experiment-design.md) 和 [05-implementation-roadmap.md](05-implementation-roadmap.md)。
 
-如果你的目标是提前把模型方向写清楚，再读 [04-model-plan.md](04-model-plan.md)。
+如果你的目标是判断当前模型路线是否合理，再读 [04-model-plan.md](04-model-plan.md)。
 
-## 总体闭环
+## 当前数据事实
 
-新仓库应该围绕下面这条闭环组织：
+目前已经确认的关键约束如下：
 
-1. 构造同一程序的多个访存布局版本。
-2. 采集时间真值和非时间运行时信号。
-3. 生成运行级样本和成对样本。
-4. 用时间定义真实优劣关系。
-5. 用 non-time 与 full 两类模型预测优化程度。
-6. 把模型输出与纯时间判断进行一致性比较。
+1. 数据来自 `data/llvm_test_suite/bcc/O0~O3`，不是专门构造的布局基准。
+2. 每个程序对应 4 个变体 `O0/O1/O2/O3`，共 145 个程序、580 条运行记录。
+3. 每条运行是单机、约 60 秒观测、1 秒窗口、按 PID 聚合的 JSONL 数据。
+4. 当前没有 repeat 维度，没有多机维度，也没有 AoS/SoA/blocking 这类布局 family。
+5. 当前训练闭环已经存在：`run_features.parquet`、`pairs.parquet`、`anchor_set.parquet`、MLP、Transformer、单程序评分。
 
-## 与旧仓库的关系
+## 现阶段最合理的闭环
 
-新仓库不复制旧仓库实现，但可以明确继承三条设计思想：
+这套方案现在应围绕下面这条闭环组织：
 
-1. 任务优先按“成对比较”来定义，而不是先做单版本绝对评分。
-2. 模型结构优先保留“共享编码器 + 显式对比融合”的思想。
-3. 评估优先比较排序关系和优劣方向，而不是只看单点误差。
+1. 从 `window_metrics.jsonl` 聚合出运行级摘要特征。
+2. 在同一程序内部构造 O0/O1/O2/O3 的 pair。
+3. 用 `total_cycles` 的对数比定义固定工作量代理标签。
+4. 训练 non-time 成对模型恢复优劣方向和倍率。
+5. 用锚点法把成对模型变成单程序评分器。
+6. 用热点窗口、热点实体和瓶颈分组把分数结果补成弱诊断输出。
 
-同时，新仓库应主动放弃三件事：
+## 当前结果给出的结论
 
-1. 不默认复用旧仓库的原始数据格式。
-2. 不默认复用旧仓库的时序输入长度和特征集合。
-3. 不默认复用旧仓库已有结论作为新项目前提。
+现有结果已经足够支持一个更聚焦的结论：这批 non-time 运行级摘要特征对“优化级别方向恢复”是有信号的，但它们证明的是 O0-O3 代理任务，不是通用的布局优化结论。
+
+1. `pairs.parquet` 覆盖 1740 条 pair，145 个程序，标签分布相对均衡。
+2. Phase 1 MLP 在测试集上的方向准确率为 0.8125，三分类准确率为 0.6667。
+3. PairTransformer 在测试集上的方向准确率提升到 0.9010，三分类准确率提升到 0.8030。
+4. 单程序评分已经能工作，但稳定性只是中等：`corr_score_log=0.5546`，`band_accuracy=0.6069`。
+
+## 这版方案主动放弃什么
+
+新方案明确不再把下面这些内容写成当前阶段目标：
+
+1. 不再默认围绕 AoS/SoA、blocking、sequential/random 这类布局 family 设计第一阶段实验。
+2. 不再把 repeat 稳定性、跨机器泛化和布局因果解释写成当前数据能直接回答的问题。
+3. 不再把“未来应该采什么”放在“当前数据还能挖什么”之前。
+
+## 与旧方向的关系
+
+这不是放弃原始研究方向，而是把它拆成两个阶段：
+
+1. 先把现有 O0-O3 数据上的代理任务做扎实，确认 non-time 信号、pairwise 学习和单程序评分真的成立。
+2. 只有当这个代理任务已经被充分验证，才值得扩展到真正的布局 family 数据集。

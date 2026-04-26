@@ -1,217 +1,373 @@
-# 实施路线与仓库结构建议
+# 实施路线与里程碑
 
-> 这份文档回答“新仓库应该怎么起步，目录怎么搭，里程碑怎么验收”。
+> 这份文档回答“如果方案完全按现有数据重排，当前做到哪一步，接下来应该怎么走”。
 
-## 1. 推荐目录结构
+## 0. 当前状态复盘
 
-建议新仓库一开始就按“数据生成 - 数据构建 - 训练评估 - 报告”的主线组织，而不是按当前仓库的采集层级组织。
+按这次重设计后的口径，当前工作已经不再属于“刚起步”，而是属于“代理任务闭环已经跑通，但特征扩展和诊断绑定还没补完”。
+
+| 里程碑 | 状态 | 当前证据 | 判断 |
+| --- | --- | --- | --- |
+| M0. 冻结数据集边界 | 已完成 | 已明确当前数据是 145 个程序的 O0-O3 单次运行代理数据 | 方案边界终于和数据一致了 |
+| M1. 跑通运行级样本构建 | 已完成 | 已有 `run_features.parquet` | 运行级摘要主输入已经稳定存在 |
+| M2. 跑通成对建模闭环 | 已完成 | 已有 `pairs.parquet`、MLP、PairTransformer 结果 | pairwise 主任务已经成立 |
+| M3. 跑通单程序评分 | 部分完成 | 已有 `anchor_set.parquet`、`scores.parquet`、`score_eval.json` | 分数可用，但稳定性一般 |
+| M4. 跑通诊断证据绑定 | 部分完成 | 已有热点、归因、指标关系脚本 | 证据链存在，但还没自动挂到评分输出 |
+| M5. 扩展特征并重训 | 未开始 | fault subtype、mm syscall 等字段还没进主特征 | 这是当前最值钱的下一步 |
+| M6. 扩展数据集 | 未开始 | 还没有 repeat、布局 family 或多机数据 | 不应先做 |
+
+如果按这套重设计后的目标估算，当前整体完成度更接近 70%，而不是 55%。原因不是工作变多了，而是目标终于和真实数据匹配了。
+
+### 0.1 当前量化结果
+
+1. 145 个程序，580 条运行记录，1740 条 pair，290 条锚点记录。
+2. Phase 1 MLP 测试集：MAE 0.5517，R² 0.7590，`dir_acc=0.8125`，`acc_3cls=0.6667`。
+3. PairTransformer 测试集：MAE 0.5316，R² 0.6335，`dir_acc=0.9010`，`acc_3cls=0.8030`。
+4. 单程序评分：`mae_score_log=0.4989`，`corr_score_log=0.5546`，`band_accuracy=0.6069`。
+
+### 0.2 当前判断
+
+1. non-time 运行级特征已经能恢复方向，代理任务成立。
+2. Transformer 当前更适合做方向判断器，而不一定是更好的纯回归器。
+3. 单程序评分已经可展示，但还不够稳，仍需靠锚点和证据设计继续补强。
+
+## 1. 当前最合适的项目结构
+
+当前方案不需要一个全新的大而全仓库，只需要围绕已有主链路组织工作。
 
 ```text
-new-layout-optimization-project/
-├── README.md
+dataset-first-optimization-plan/
 ├── docs/
-│   ├── research_scope.md
-│   ├── data_schema.md
-│   ├── experiment_plan.md
+│   ├── scope_and_goals.md
+│   ├── data_design.md
+│   ├── experiment_design.md
 │   ├── model_plan.md
-│   └── milestones.md
-├── benchmarks/
-│   ├── sequential_stride_random/
-│   ├── aos_soa/
-│   └── blocking/
+│   └── implementation_roadmap.md
 ├── scripts/
-│   ├── collect_runs.py
-│   ├── build_run_table.py
-│   ├── build_run_windows.py
 │   ├── build_run_features.py
 │   ├── build_pair_table.py
-│   ├── train_baseline.py
-│   ├── infer_single_program.py
-│   └── evaluate.py
-├── configs/
-│   ├── collection/
-│   ├── features/
-│   └── models/
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── splits/
-├── models/
-│   ├── baselines/
-│   └── siamese/
-└── reports/
+│   ├── build_anchor_set.py
+│   ├── train_model.py
+│   ├── train_transformer.py
+│   └── score_program.py
+├── train_set/
+│   ├── run_features.parquet
+│   ├── pairs.parquet
+│   ├── anchor_set.parquet
+│   ├── model_eval.json
+│   ├── model_transformer_eval.json
+│   └── score_eval.json
+└── results/
 ```
+
+这说明当前主线已经很清楚：先把已有脚本和产物收束成一个稳定闭环，而不是先扩展更多目录和中间层。
 
 ## 2. 代码组织原则
 
-### 原则 1. 先稳定数据构建脚本
+### 原则 1. 原始 JSONL 只做两件事
 
-新仓库最先要稳定的不是训练脚本，而是：
+1. 生成运行级摘要特征
+2. 为诊断报告提供证据
 
-1. collect_runs.py
-2. build_run_table.py
-3. build_run_windows.py
-4. build_run_features.py
-5. build_pair_table.py
+不要再从原始 JSONL 抽象出新的大层次。
 
-因为研究闭环是否成立，首先取决于标签和样本是否可靠。
+### 原则 2. 训练代码只消费三个核心表
 
-### 原则 2. 训练脚本只消费标准表
+1. `run_features`
+2. `pairs`
+3. `anchor_set`
 
-训练代码不应直接读取原始实验日志。它只应消费处理后的 run table 和 pair table。
+### 原则 3. 先扩特征，再扩模型
 
-单程序推理代码也不应直接读取 `window_metrics.jsonl`，而应消费：
+当前 raw data 还有很多未使用字段，因此下一个阶段首先应是特征扩展，而不是更复杂的 backbone。
 
-1. `run_windows.parquet` 用于坏窗口定位。
-2. `run_features.parquet` 用于优化程度打分与瓶颈归因。
+### 原则 4. 诊断层和评分层分开实现
 
-### 原则 3. 特征视图配置化
+评分模型负责给出方向和分数，诊断层负责从热点和窗口证据里补“为什么”。不要把二者混成一个黑箱模型目标。
 
-time-only、non-time、full 三种输入视图应该通过配置文件切换，而不是写死在模型脚本里。
+## 3. 新的里程碑定义
 
-## 3. 里程碑建议
-
-### M0. 冻结问题定义
+### M0. 冻结数据集边界
 
 交付物：
 
-1. 研究范围文档。
-2. 数据字段文档。
-3. 实验对照文档。
+1. 数据边界文档
+2. 当前样本设计文档
+3. 当前实验设计文档
 
 验收标准：
 
-1. 明确标签来自时间。
-2. 明确 non-time 是主实验。
-3. 明确 full 是增强设置。
+1. 明确这是 O0-O3 代理任务
+2. 明确当前没有 repeat / 多机 / 布局 family
+3. 明确标签来自 `total_cycles` 代理
 
-### M1. 构造第一批 benchmark
+### M1. 稳定运行级样本
 
 交付物：
 
-1. 至少 3 个程序家族。
-2. 每个家族至少 2 到 3 个布局版本。
-3. 每个版本至少多个 repeat。
+1. `run_features.parquet`
+2. `feature_scaler.json`
 
 验收标准：
 
-1. 时间排序基本稳定。
-2. 不同版本差异具备可解释性。
+1. 运行级特征列固定
+2. train/test 划分前的样本清洗规则固定
 
-### M2. 跑通数据表构建
+### M2. 稳定 pairwise 建模
 
 交付物：
 
-1. runs.parquet
-2. pairs.parquet
-3. split 定义文件
+1. `pairs.parquet`
+2. 线性/MLP/Transformer 结果
+3. 各变体对细分结果
 
 验收标准：
 
-1. pair 构造规则固定。
-2. 训练集与测试集切分可复现。
+1. held-out program 划分可复现
+2. 方向判断显著优于随机和朴素基线
 
-### M3. 跑通第一轮基线
+### M3. 跑通单程序评分
 
 交付物：
 
-1. time-only 基线结果。
-2. non-time 线性或树模型结果。
-3. full 结果。
+1. `anchor_set.parquet`
+2. `scores.parquet`
+3. `score_eval.json`
 
 验收标准：
 
-1. 能直接回答“时间是不是必须”。
-2. 结果图表和误差表可复现。
+1. 单程序分数与锚点真值保持中等以上相关
+2. 档位输出可解释
 
-### M4. 引入 Siamese 摘要模型
+### M4. 绑定诊断证据
 
 交付物：
 
-1. 共享编码器版本。
-2. 对比普通 MLP baseline 的结果。
+1. score + bottleneck
+2. score + hotspot evidence
+3. score + support metrics
 
 验收标准：
 
-1. 结构增益是否成立。
-2. 差分融合是否优于简单拼接。
+1. 每次评分都能附至少一种证据
+2. 证据可回指到原始窗口或实体
 
-### M5. 跑通单程序诊断闭环
+### M5. 扩展特征并重训
 
 交付物：
 
-1. 单程序优化程度推理接口。
-2. 瓶颈类别归因结果。
-3. 坏窗口或热点实体摘要报告。
+1. fault subtype 扩展特征
+2. mm syscall 扩展特征
+3. warmup/steady-state 扩展特征
 
 验收标准：
 
-1. 输入一个程序版本和一次采集结果，系统能输出优化分数。
-2. 系统能指出主要瓶颈属于 cache、TLB、fault 或 low-IPC 等哪一类。
-3. 报告里至少包含对应的坏指标或坏窗口证据。
+1. 在难 pair 上有真实提升
+2. 提升来自特征，而不是标签泄漏
 
-### M6. 视情况升级为时序模型
+### M6. 视情况扩数据集
 
-交付物：
+只有当前所有阶段都已经稳定，才考虑：
 
-1. 窗口级序列数据。
-2. 时序 Siamese 模型。
+1. repeat 采样
+2. 布局 family
+3. 多机数据
 
-验收标准：
+## 4. 当前最该做的任务单
 
-1. 时序模型收益明显。
-2. 复杂度提升有明确解释价值。
+### P0. 文档重设计
 
-## 4. P0 到 P2 的具体任务单
+1. 把方案完全对齐到现有数据
+2. 删除旧布局设想的主线地位
+3. 明确当前结论只是代理任务结论
 
-### P0. 文档和协议冻结
+### P1. 特征扩展
 
-1. 写清样本字段。
-2. 写清配对规则。
-3. 写清三种特征视图。
-4. 写清评估指标。
+1. 接入 fault subtype 比例特征
+2. 接入 mm syscall 密度特征
+3. 接入 warmup/steady-state 分段特征
 
-### P1. 数据采集与构建
+### P2. 实验收束
 
-1. 跑基准程序。
-2. 收集时间与非时间信号。
-3. 生成 runs 表。
-4. 生成 run_windows 表。
-5. 生成 run_features 表。
-6. 清洗异常运行。
-7. 生成 pairs 表。
+1. 统一输出朴素基线、线性基线、MLP、Transformer 结果
+2. 统一输出各变体对细分结果
+3. 统一输出单程序评分结果
 
-### P2. 最小建模闭环
+### P3. 评分与证据绑定
 
-1. 跑纯时间基准。
-2. 跑 non-time 线性基线。
-3. 跑 full 线性基线。
-4. 跑共享 MLP Siamese。
-5. 输出统一报告。
+1. 让 `score_program.py` 自动挂接热点窗口摘要
+2. 让 `score_program.py` 自动挂接热点实体摘要
+3. 让 `score_program.py` 自动挂接支持特征摘要
 
-### P3. 单程序诊断闭环
+## 5. 直接可执行的下一步顺序
 
-1. 选定锚点版本。
-2. 实现单程序优化分数推理。
-3. 实现瓶颈类别归因。
-4. 实现坏窗口或热点证据汇总。
-5. 输出单程序诊断报告。
+如果现在继续推进，推荐顺序如下：
 
-推荐脚本职责：
+1. 先改 `build_run_features.py`，把现有未用字段接进来。
+2. 重建 `run_features`、`pairs`、`anchor_set`。
+3. 统一跑线性、MLP、Transformer 的 held-out 实验。
+4. 单独分析 `O1-O2` 和 `O2-O3` 这些难 pair。
+5. 把热点窗口和热点实体自动挂到单程序评分报告里。
+6. 只有这些都做完，再讨论是否值得扩数据集。
 
-1. `build_run_windows.py`：按 `run_id + window_id` 聚合窗口级程序视图。
-2. `build_run_features.py`：从 `run_windows` 生成单 run 聚合特征。
-3. `infer_single_program.py`：读取 `run_features` 和锚点配置，输出 `diagnosis_report.json`。
+## 6. 可执行 TODO
 
-## 5. 直接可执行的起步顺序
+下面这 5 项不是方向性建议，而是可以直接排进开发计划、逐项验收的实现任务。
 
-如果你现在就要开新仓库，推荐按下面顺序做：
+### TODO 1. 扩展运行级特征并收敛特征列定义
 
-1. 先把这组 docs 原样带过去。
-2. 先写 benchmark 程序和数据表构建脚本。
-3. 在没有任何深度模型前，先跑 time-only 与 non-time 的简单基线。
-4. 只有当 non-time 确实有信号时，再引入 Siamese 架构。
-5. 跑通单程序优化分数和瓶颈归因报告。
-6. 只有当运行级摘要已经证明有效时，再升级到窗口级时序输入。
+目标：把当前 `window_metrics.jsonl` 里还没进入模型的关键信号接入 `run_features`，并结束 `NON_TIME_COLS` 在多个脚本里重复拷贝的状态。
 
-这条路线的核心是先验证研究问题，再增加模型复杂度。
+涉及文件：
+
+1. `scripts/build_run_features.py`
+2. `scripts/build_pair_table.py`
+3. `scripts/build_anchor_set.py`
+4. `scripts/train_model.py`
+5. `scripts/train_transformer.py`
+6. `scripts/score_program.py`
+7. 新增一个共享特征配置模块，例如 `scripts/feature_columns.py`
+
+具体改动：
+
+1. 在 `build_run_features.py` 中增加 fault subtype 比例特征：`anon_fault_ratio`、`file_fault_ratio`、`write_fault_ratio`、`instruction_fault_ratio`、`private_fault_ratio`。
+2. 增加 mm syscall 强度特征：`mmap_calls_per_ms`、`munmap_calls_per_ms`、`mprotect_calls_per_ms`、`brk_calls_per_ms`、以及主要 `*_bytes` 的归一化版本。
+3. 增加 warmup / steady-state 分段特征，例如前 5 个窗口和后 5 个窗口的 IPC、fault、LLC MPKI 均值。
+4. 把 `NON_TIME_COLS` 从各脚本中抽出来，统一由一个共享模块维护，避免后续每加一列就改 5 到 6 个文件。
+
+建议命令：
+
+```bash
+.venv/bin/python scripts/build_run_features.py
+.venv/bin/python scripts/build_pair_table.py
+.venv/bin/python scripts/build_anchor_set.py
+```
+
+完成标准：
+
+1. `run_features.parquet` 和 `run_features_zscore.parquet` 能稳定产出。
+2. 新特征列已经进入 pair、anchor、训练和评分主链路。
+3. 特征列定义只保留一个权威来源，不再在多个脚本里手工同步。
+
+### TODO 2. 补统一评估脚本
+
+目标：把当前分散在多个 `*.json` 里的结果收成一张可读表，避免每次人工拼对比结论。
+
+涉及文件：
+
+1. 新增 `scripts/train_linear_baseline.py`
+2. 新增 `scripts/evaluate_models.py`
+3. `scripts/train_model.py`
+4. `scripts/train_transformer.py`
+
+具体改动：
+
+1. 新增线性基线训练脚本，至少输出 Ridge / Logistic Regression 的 held-out 结果。
+2. 新增统一评估脚本，读取朴素基线、线性基线、MLP、Transformer 的结果文件。
+3. 输出 `train_set/eval_summary.csv` 和 `train_set/eval_summary.md`。
+4. 把评估维度统一成：`MAE`、`RMSE`、`R²`、`dir_acc`、`acc_3cls`，并附带每个 split 的样本量。
+
+建议命令：
+
+```bash
+.venv/bin/python scripts/train_linear_baseline.py
+.venv/bin/python scripts/train_model.py
+.venv/bin/python scripts/train_transformer.py --config fixed_work_transformer
+.venv/bin/python scripts/evaluate_models.py
+```
+
+完成标准：
+
+1. 朴素基线、线性模型、MLP、Transformer 可以在一张表中直接比较。
+2. 不再需要手工打开多个 json 文件拼结论。
+3. 文档里的模型结论可以直接引用 `eval_summary.md`。
+
+### TODO 3. 单独做难样本误差分析
+
+目标：把 `O1-O2`、`O2-O3` 这类难 pair 的失误模式显式分析出来，避免继续盲目换 backbone。
+
+涉及文件：
+
+1. 新增 `scripts/analyze_hard_pairs.py`
+2. `train_set/pairs.parquet`
+3. `train_set/model_eval.json`
+4. `train_set/model_transformer_eval.json`
+
+具体改动：
+
+1. 按 variant 对拆分误差，重点分析 `O1-O2` 和 `O2-O3`。
+2. 输出每个 pair 的 `dir_acc`、`acc_3cls`、误差分位数和最差样本列表。
+3. 对最差样本回查 `run_features`，统计它们集中缺哪些特征模式。
+4. 输出一份 `train_set/hard_pair_report.md`。
+
+建议命令：
+
+```bash
+.venv/bin/python scripts/analyze_hard_pairs.py
+```
+
+完成标准：
+
+1. 能明确回答当前最难的是哪些 pair。
+2. 能明确回答这些错误更像标签接近、特征缺失，还是模型欠拟合。
+3. 后续特征扩展或锚点策略的方向能直接由这份报告驱动。
+
+### TODO 4. 让单程序评分自动挂接证据
+
+目标：让 `score_program.py` 不只输出一个分数和一级瓶颈，而是自动附上原始数据证据。
+
+涉及文件：
+
+1. `scripts/score_program.py`
+2. `analysis/dataset_hotspot.py`
+3. `analysis/attribution_report.py`
+4. `results/llvm_test_suite/**`
+
+具体改动：
+
+1. 在评分输出中加入热点窗口摘要，例如最坏窗口的 `window_id`、metric、峰值强度。
+2. 加入热点实体摘要，例如最相关 PID / comm 或归因实体。
+3. 把瓶颈类别和支持特征做成结构化字段，而不是只打印在终端。
+4. 新增 `diagnosis_report.json` 或等价输出文件，作为单程序诊断的标准产物。
+
+建议命令：
+
+```bash
+.venv/bin/python scripts/score_program.py --device cpu --program BitBench_drop3 --variant O2
+```
+
+完成标准：
+
+1. 单程序评分结果能附带热点窗口证据。
+2. 单程序评分结果能附带支持特征摘要。
+3. 评分输出既能给人看，也能被后续脚本消费。
+
+### TODO 5. 建立“是否值得扩数据集”的决策闸门
+
+目标：在扩展到真正布局 family 数据集之前，先把当前数据是否真的被榨干做成一个可执行判断，而不是主观感觉。
+
+涉及文件：
+
+1. 新增 `scripts/dataset_gap_audit.py`
+2. `train_set/eval_summary.csv`
+3. `train_set/hard_pair_report.md`
+4. `docs/new-repo-plan/05-implementation-roadmap.md`
+
+具体改动：
+
+1. 汇总当前尚未使用的原始字段。
+2. 汇总难 pair 是否仍然集中在 `O1-O2` / `O2-O3`。
+3. 汇总特征扩展前后是否还有明显增益空间。
+4. 输出 `train_set/dataset_gap_audit.md`，给出一个明确结论：继续榨当前数据，还是启动真正布局 family 数据集设计。
+
+建议命令：
+
+```bash
+.venv/bin/python scripts/dataset_gap_audit.py
+```
+
+完成标准：
+
+1. 扩数据不再靠直觉推进。
+2. 能明确说明“为什么现在应该扩数据”或者“为什么现在还不该扩数据”。
+3. 这份结论能直接作为下一阶段立项依据。

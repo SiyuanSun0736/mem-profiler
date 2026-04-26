@@ -1,0 +1,68 @@
+{
+  "model": "Phase1_MLP_concat",
+  "architecture": "[xi; xj; xi-xj] -> MLP[128, 64, 32] -> log_ratio",
+  "feature_view": "non_time",
+  "feature_dim": 54,
+  "input_dim": 162,
+  "tie_threshold": 0.05,
+  "splits": {
+    "train_programs": 101,
+    "val_programs": 22,
+    "test_programs": 22,
+    "train_pairs": 1212,
+    "val_pairs": 264,
+    "test_pairs": 264
+  },
+  "metrics": {
+    "train": {
+      "n": 1212,
+      "mae": 0.1396,
+      "rmse": 0.2078,
+      "r2": 0.9929,
+      "dir_acc": 0.9482,
+      "acc_3cls": 0.8003
+    },
+    "val": {
+      "n": 264,
+      "mae": 1.0607,
+      "rmse": 4.3755,
+      "r2": -11.9291,
+      "dir_acc": 0.8091,
+      "acc_3cls": 0.6667
+    },
+    "test": {
+      "n": 264,
+      "mae": 0.5011,
+      "rmse": 0.9039,
+      "r2": 0.8575,
+      "dir_acc": 0.8265,
+      "acc_3cls": 0.6591
+    }
+  },
+  "ridge_baseline": {
+    "train": {
+      "n": 1212,
+      "mae": 0.5603,
+      "rmse": 0.83,
+      "r2": 0.8867,
+      "dir_acc": 0.8245,
+      "acc_3cls": 0.6733
+    },
+    "val": {
+      "n": 264,
+      "mae": 2.0545,
+      "rmse": 7.5251,
+      "r2": -37.2416,
+      "dir_acc": 0.7,
+      "acc_3cls": 0.5833
+    },
+    "test": {
+      "n": 264,
+      "mae": 1.0182,
+      "rmse": 2.0405,
+      "r2": 0.274,
+      "dir_acc": 0.7653,
+      "acc_3cls": 0.6288
+    }
+  }
+}

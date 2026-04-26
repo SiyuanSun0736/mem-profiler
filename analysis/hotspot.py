@@ -233,7 +233,6 @@ def write_window_report(
     with open(hot_f, "w", encoding="utf-8") as fh:
         for _, row in ws.iterrows():
             rec: dict[str, Any] = {
-                "schema_version": "1.0",
                 "run_id":    run_id,
                 "window_id": int(row["window_id"]),
                 "metric":    metric,
@@ -256,7 +255,6 @@ def write_window_report(
         with open(attr_f, "w", encoding="utf-8") as fh:
             for _, row in wa.iterrows():
                 rec = {
-                    "schema_version": "1.0",
                     "run_id":    run_id,
                     "window_id": int(row["window_id"]),
                     "metric":    metric,
@@ -429,7 +427,6 @@ def write_metric_relation_report(
     with open(rel_f, "w", encoding="utf-8") as fh:
         for _, row in mr["pair_summary"].iterrows():
             rec: dict[str, Any] = {
-                "schema_version": "1.0",
                 "run_id":         run_id,
                 "metric_a":       row["metric_a"],
                 "metric_b":       row["metric_b"],
@@ -482,7 +479,6 @@ def write_hotspot_summary(
     with open(out_f, "a", encoding="utf-8") as f:
         for _, row in agg.iterrows():
             rec = {
-                "schema_version": "1.0",
                 "run_id":         run_id,
                 "pid":            int(row["pid"]),
                 "comm":           row["comm"],
