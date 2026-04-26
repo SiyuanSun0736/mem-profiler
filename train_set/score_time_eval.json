@@ -1,0 +1,29 @@
+{
+  "n_valid": 290,
+  "n_excluded": 35,
+  "n_clean": 255,
+  "min_active_pids_threshold": 5,
+  "mae_proxy_time": 0.595985,
+  "corr_proxy_time": 0.112893,
+  "spearman_proxy": 0.24418,
+  "dir_acc_proxy": 0.708661,
+  "band_acc_proxy": 0.85098,
+  "mae_model_time": 0.95066,
+  "corr_model_time": -0.047194,
+  "spearman_model": 0.014206,
+  "dir_acc_model": 0.685039,
+  "band_acc_model": 0.796078,
+  "unfiltered": {
+    "n": 290,
+    "mae_proxy_time": 0.83083,
+    "corr_proxy_time": -0.519549,
+    "spearman_proxy": 0.195954,
+    "mae_model_time": 1.020302,
+    "corr_model_time": -0.179206,
+    "spearman_model": -0.079449
+  },
+  "score_time_mean": 0.260776,
+  "score_time_std": 0.564728,
+  "ref_min_gt": -2.698954,
+  "ref_max_gt": 6.144691
+}

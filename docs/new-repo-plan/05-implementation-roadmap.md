@@ -11,7 +11,7 @@
 | M0. 冻结数据集边界 | 已完成 | 已明确当前数据是 145 个程序的 O0-O3 单次运行代理数据 | 方案边界终于和数据一致了 |
 | M1. 跑通运行级样本构建 | 已完成 | 已有 `run_features.parquet` | 运行级摘要主输入已经稳定存在 |
 | M2. 跑通成对建模闭环 | 已完成 | 已有 `pairs.parquet`、MLP、PairTransformer 结果 | pairwise 主任务已经成立 |
-| M3. 跑通单程序评分 | 部分完成 | 已有 `anchor_set.parquet`、`scores.parquet`、`score_eval.json` | 分数可用，但稳定性一般 |
+| M3. 跑通单程序评分 | 部分完成 | 已有 `anchor_set.parquet`、`scores.parquet`、`score_eval.json` | 分数可用，但还需要用时间评分做最终闭环验证 |
 | M4. 跑通诊断证据绑定 | 部分完成 | 已有热点、归因、指标关系脚本 | 证据链存在，但还没自动挂到评分输出 |
 | M5. 扩展特征并重训 | 未开始 | fault subtype、mm syscall 等字段还没进主特征 | 这是当前最值钱的下一步 |
 | M6. 扩展数据集 | 未开始 | 还没有 repeat、布局 family 或多机数据 | 不应先做 |
@@ -23,13 +23,13 @@
 1. 145 个程序，580 条运行记录，1740 条 pair，290 条锚点记录。
 2. Phase 1 MLP 测试集：MAE 0.5517，R² 0.7590，`dir_acc=0.8125`，`acc_3cls=0.6667`。
 3. PairTransformer 测试集：MAE 0.5316，R² 0.6335，`dir_acc=0.9010`，`acc_3cls=0.8030`。
-4. 单程序评分：`mae_score_log=0.4989`，`corr_score_log=0.5546`，`band_accuracy=0.6069`。
+4. 单程序评分：当前 proxy 口径已可产出，但最终仍需补 `score_model` 对 `score_time` 的外部验证。
 
 ### 0.2 当前判断
 
 1. non-time 运行级特征已经能恢复方向，代理任务成立。
 2. Transformer 当前更适合做方向判断器，而不一定是更好的纯回归器。
-3. 单程序评分已经可展示，但还不够稳，仍需靠锚点和证据设计继续补强。
+3. 单程序评分已经可展示，但还不够稳，仍需靠锚点、证据设计，以及独立时间评分验证继续补强。
 
 ## 1. 当前最合适的项目结构
 
@@ -99,7 +99,8 @@ dataset-first-optimization-plan/
 
 1. 明确这是 O0-O3 代理任务
 2. 明确当前没有 repeat / 多机 / 布局 family
-3. 明确标签来自 `total_cycles` 代理
+3. 明确训练标签来自 `cycles_per_iter` 代理
+4. 明确最终评分结论必须由独立时间评分复核
 
 ### M1. 稳定运行级样本
 
@@ -136,8 +137,9 @@ dataset-first-optimization-plan/
 
 验收标准：
 
-1. 单程序分数与锚点真值保持中等以上相关
-2. 档位输出可解释
+1. 单程序分数与 proxy 锚点真值保持中等以上相关
+2. 单程序分数与时间评分 `score_time` 保持中等以上相关
+3. 档位输出可解释
 
 ### M4. 绑定诊断证据
 
@@ -192,6 +194,7 @@ dataset-first-optimization-plan/
 1. 统一输出朴素基线、线性基线、MLP、Transformer 结果
 2. 统一输出各变体对细分结果
 3. 统一输出单程序评分结果
+4. 统一输出模型分数对 `score_time` 的验证结果
 
 ### P3. 评分与证据绑定
 
@@ -206,9 +209,10 @@ dataset-first-optimization-plan/
 1. 先改 `build_run_features.py`，把现有未用字段接进来。
 2. 重建 `run_features`、`pairs`、`anchor_set`。
 3. 统一跑线性、MLP、Transformer 的 held-out 实验。
-4. 单独分析 `O1-O2` 和 `O2-O3` 这些难 pair。
-5. 把热点窗口和热点实体自动挂到单程序评分报告里。
-6. 只有这些都做完，再讨论是否值得扩数据集。
+4. 用独立 fixed-work timing 或 `time_per_iter` 对照集验证最终单程序评分。
+5. 单独分析 `O1-O2` 和 `O2-O3` 这些难 pair。
+6. 把热点窗口和热点实体自动挂到单程序评分报告里。
+7. 只有这些都做完，再讨论是否值得扩数据集。
 
 ## 6. 可执行 TODO
 
@@ -266,6 +270,7 @@ dataset-first-optimization-plan/
 2. 新增统一评估脚本，读取朴素基线、线性基线、MLP、Transformer 的结果文件。
 3. 输出 `train_set/eval_summary.csv` 和 `train_set/eval_summary.md`。
 4. 把评估维度统一成：`MAE`、`RMSE`、`R²`、`dir_acc`、`acc_3cls`，并附带每个 split 的样本量。
+5. 单程序评分部分额外输出 `score_model` 对 `score_time` 的 `MAE`、Pearson/Spearman 相关、`band_accuracy_time`。
 
 建议命令：
 
@@ -280,7 +285,41 @@ dataset-first-optimization-plan/
 
 1. 朴素基线、线性模型、MLP、Transformer 可以在一张表中直接比较。
 2. 不再需要手工打开多个 json 文件拼结论。
-3. 文档里的模型结论可以直接引用 `eval_summary.md`。
+3. 单程序评分既能看 proxy 结果，也能看时间评分验证结果。
+4. 文档里的模型结论可以直接引用 `eval_summary.md`。
+
+### TODO 2.5. 补时间评分验证闭环
+
+目标：为单程序评分建立独立于训练 proxy label 的最终验收口径，防止“分数看起来合理，但和真实时间收益脱节”。
+
+涉及文件：
+
+1. 新增 `scripts/build_time_score_table.py`
+2. 新增 `scripts/evaluate_score_vs_time.py`
+3. `train_set/scores.parquet`
+4. 新增 `train_set/time_scores.parquet`
+5. 新增 `train_set/score_time_eval.json`
+
+具体改动：
+
+1. 从独立 fixed-work repeat 结果中构建 `time_per_iter` 与 `score_time`。
+2. 若独立 timing 数据暂缺，允许用 `wall_time_sec / completion_count` 生成临时对照表，但必须在报告中标记为 provisional。
+3. 将 `score_program.py` 或后处理脚本输出的 `score_model` 与 `score_time` 对齐到同一 program/variant 级表。
+4. 输出 `mae_score_time_log`、`corr_score_time_log`、`spearman_score_time`、`band_accuracy_time`。
+5. 在报告中明确区分“proxy 拟合效果”和“真实时间评分一致性”。
+
+建议命令：
+
+```bash
+.venv/bin/python scripts/build_time_score_table.py
+.venv/bin/python scripts/evaluate_score_vs_time.py
+```
+
+完成标准：
+
+1. 最终模型分数有独立时间评分对照，不再只围绕 proxy label 自证。
+2. 报告能明确回答模型分数是否真的对应时间收益。
+3. 后续所有“单程序评分有效”的结论默认引用 `score_time_eval.json`。
 
 ### TODO 3. 单独做难样本误差分析
 

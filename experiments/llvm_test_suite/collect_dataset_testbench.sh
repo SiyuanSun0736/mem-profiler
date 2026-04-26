@@ -406,8 +406,17 @@ for test_subdir in "$TEST_DIR"/*/; do
     target_comm="${target_comm:0:15}"
 
     if [[ "$DRYRUN" -eq 0 ]]; then
+        # 从 run_metadata.jsonl 读取真实完成轮次（由 collect_single_bcc_testbench.sh 写入）
+        _completion_count=0
+        if [[ -f "$out_dir/run_metadata.jsonl" ]]; then
+            _val=$(grep '"_record_type".*"run_stats"' "$out_dir/run_metadata.jsonl" \
+                   | grep -o '"completion_count":[[:space:]]*[0-9]*' \
+                   | grep -o '[0-9]*$' | tail -1)
+            [[ "$_val" =~ ^[0-9]+$ ]] && _completion_count=$_val
+        fi
+
         local_bench_cmd_escaped="${bench_cmd//\"/\\\"}"
-        printf '{"program":"%s","variant":"%s","binary":"%s","test_file":"%s","run_cmd":"%s","target_comm":"%s","output_dir":"%s","window_sec":%s,"duration_sec":%s,"sample_rate":%s}\n' \
+        printf '{"program":"%s","variant":"%s","binary":"%s","test_file":"%s","run_cmd":"%s","target_comm":"%s","output_dir":"%s","window_sec":%s,"duration_sec":%s,"sample_rate":%s,"completion_count":%d}\n' \
             "$bench_name" \
             "$VARIANT" \
             "${binary#$PROJECT_ROOT/}" \
@@ -418,6 +427,7 @@ for test_subdir in "$TEST_DIR"/*/; do
             "$WINDOW_SEC" \
             "$DURATION_SEC" \
             "$SAMPLE_RATE" \
+            "$_completion_count" \
             >> "$MANIFEST"
     fi
 

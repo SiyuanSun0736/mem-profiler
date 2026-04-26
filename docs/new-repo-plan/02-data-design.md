@@ -124,15 +124,28 @@
 
 因此，现阶段标签应继续沿用已经落地且和数据一致的定义：
 
-1. 用 `total_cycles` 作为固定工作量下的时间代理。
-2. pairwise 回归标签定义为 `log(cycles_j / cycles_i)`。
+1. 用 `cycles_per_iter = total_cycles / iter_count` 作为当前固定工作量代理时间，其中 `iter_count` 优先取真实 `completion_count`，缺失时退化为 `active_pid_count`。
+2. pairwise 回归标签定义为 `log(cycles_per_iter_j / cycles_per_iter_i)`。
 3. pairwise 三分类标签定义为：
    1. `> +0.05`：`i_better`
    2. `< -0.05`：`j_better`
    3. 其余：`tie`
-4. 单程序评分标签定义为相对 `O0` 的对数分数：`log(cycles_O0 / cycles_k)`。
+4. 单程序评分标签定义为相对 `O0` 的对数分数：`log(cycles_per_iter_O0 / cycles_per_iter_k)`。
 
-这一定义并不完美，但它与现有数据、现有脚本和现有评估结果是一致的。
+这一定义是训练期代理标签，而不是最终对外结论本身。原因是：当前数据集的 60s while-true 采集方式更适合恢复“单次迭代的相对代价”，但不能直接替代真正的时间评分。
+
+### 5.1 最终评分必须回到时间验证
+
+模型最终输出的是单程序优化分数，因此最后验收不能只看它是否拟合 `cycles_per_iter`，还必须看它是否和真实时间评分一致。
+
+建议把时间侧真值单独定义为：
+
+1. 为每个 program/variant 运行固定工作量基准。
+2. 记录每次完整执行的 `wall_time`，做至少 3 到 5 次 repeat。
+3. 用中位数时间定义时间真值分数：`score_time(k) = log(time_O0 / time_k)`。
+4. 用模型输出的 `score_model(k)` 与 `score_time(k)` 做相关性、MAE 和档位一致率验证。
+
+如果暂时还没有独立 fixed-work timing 数据，则可以用 `wall_time_sec / completion_count` 形成一个临时 `time_per_iter` 对照分数；但这只能作为过渡检查，不能替代最终时间验证。
 
 ## 6. 当前运行级特征设计
 
