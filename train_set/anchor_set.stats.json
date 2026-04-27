@@ -4,12 +4,12 @@
     "O0",
     "O3"
   ],
-  "n_programs": 145,
-  "n_anchors": 290,
+  "n_programs": 128,
+  "n_anchors": 250,
   "score_min": -2.0936,
-  "score_max": 12.4298,
+  "score_max": 7.6103,
   "score_p5": 0.0,
-  "score_p95": 4.3998,
-  "score_mean": 1.1179,
-  "score_std": 1.9184
+  "score_p95": 4.1035,
+  "score_mean": 1.036,
+  "score_std": 1.4968
 }

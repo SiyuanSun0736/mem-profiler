@@ -1,8 +1,8 @@
 {
-  "n_runs": 717,
-  "n_with_gt": 427,
-  "mae_score_log": 0.4484,
-  "corr_score_log": 0.828,
-  "dir_accuracy": 0.5667,
-  "band_accuracy": 0.6909
+  "n_runs": 509,
+  "n_with_gt": 250,
+  "mae_score_log": 0.4386,
+  "corr_score_log": 0.8387,
+  "dir_accuracy": 0.7,
+  "band_accuracy": 0.7
 }

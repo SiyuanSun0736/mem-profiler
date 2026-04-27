@@ -20,12 +20,18 @@
 3. [03-experiment-design.md](03-experiment-design.md)：基于现有数据应做哪些实验，哪些暂时不该做。
 4. [04-model-plan.md](04-model-plan.md)：围绕现有 `run_features` / `pairs` / `anchor_set` 的模型路线。
 5. [05-implementation-roadmap.md](05-implementation-roadmap.md)：按现有脚本和产物重排里程碑与下一步任务。
+6. [06-collection-to-transformer-workflow.md](06-collection-to-transformer-workflow.md)：从采集数据到 PairTransformer 训练的具体执行流程与流程图。
+7. [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)：当前数据问题、最值得做的优化和优先级。
 
 ## 推荐阅读顺序
 
 如果你的目标是先把这批数据的边界说清楚，先读 [01-scope-and-goals.md](01-scope-and-goals.md) 和 [02-data-design.md](02-data-design.md)。
 
 如果你的目标是立刻继续做实验，先读 [03-experiment-design.md](03-experiment-design.md) 和 [05-implementation-roadmap.md](05-implementation-roadmap.md)。
+
+如果你的目标是按命令一步步从采集跑到 Transformer 训练，直接读 [06-collection-to-transformer-workflow.md](06-collection-to-transformer-workflow.md)。
+
+如果你的目标是先判断这批数据最主要的问题在哪、下一步优先改什么，直接读 [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)。
 
 如果你的目标是判断当前模型路线是否合理，再读 [04-model-plan.md](04-model-plan.md)。
 
@@ -34,7 +40,7 @@
 目前已经确认的关键约束如下：
 
 1. 原始数据根目录来自 `data/llvm_test_suite/bcc/O0~O3`，不是专门构造的布局基准。
-2. 当前 raw manifest 不是严格的 `145 x 4`：`O1/O2/O3` 各有 145 条记录，但 `O0` manifest 有 283 条记录，只对应 145 个 unique program，说明 `O0` 存在重复采集；其中至少有 1 条 manifest 指向缺失输出目录。
+2. 当前 `manifest_bcc_O0~O3.jsonl` 已经收敛为严格的 `145 x 4`：四个 variant 各有 145 条记录，采集脚本会在收尾阶段自动去重并重建 manifest。
 3. 当前每次 raw run 至少包含 `run_metadata.jsonl` 与 `window_metrics.jsonl`；`run_metadata.jsonl` 已记录 `enabled_probes`、`host_info`、`aggregation_scope` 和 `collection_backend=hybrid_perf_event_open_bcc`。
 4. 当前 train_set 对应的是一个冻结训练快照：145 个程序、580 条运行记录、1740 条 pair、290 条锚点。这才是现有模型结果的真实数据口径。
 5. 这个训练快照不等同于最新 raw 目录：`run_features.csv` 里保存的 `output_dir` 指向更早一轮采集路径，因此“最新 raw data”和“当前训练产物”必须分开叙述。
@@ -46,7 +52,7 @@
 
 1. 从 `window_metrics.jsonl` 聚合出运行级摘要特征。
 2. 在同一程序内部构造 O0/O1/O2/O3 的 pair。
-3. 用 `total_cycles` 的对数比定义固定工作量代理标签。
+3. 用 `cycles_per_iter` 的对数比定义固定工作量代理标签。
 4. 训练 non-time 成对模型恢复优劣方向和倍率。
 5. 用锚点法把成对模型变成单程序评分器。
 6. 用热点窗口、热点实体和瓶颈分组把分数结果补成弱诊断输出。

@@ -1,0 +1,141 @@
+{
+  "baseline": "O0",
+  "min_active_pids": 5,
+  "min_active_window_ratio": 0.1,
+  "active_window_ratio_available": true,
+  "n_seen": 509,
+  "n_programs_seen": 132,
+  "n_input_ok": 400,
+  "n_input_filtered": 109,
+  "n_programs_with_loose_baseline": 128,
+  "n_programs_with_strict_baseline": 104,
+  "n_valid_loose": 498,
+  "n_valid_strict": 390,
+  "reasons": {
+    "low_active_pid_count": 0,
+    "low_active_window_ratio": 109,
+    "missing_strict_baseline": 10
+  },
+  "by_variant": {
+    "O0": {
+      "seen": 128,
+      "input_ok": 104,
+      "input_filtered": 24,
+      "valid_loose": 128,
+      "valid_strict": 104
+    },
+    "O1": {
+      "seen": 127,
+      "input_ok": 99,
+      "input_filtered": 28,
+      "valid_loose": 124,
+      "valid_strict": 96
+    },
+    "O2": {
+      "seen": 128,
+      "input_ok": 99,
+      "input_filtered": 29,
+      "valid_loose": 124,
+      "valid_strict": 95
+    },
+    "O3": {
+      "seen": 126,
+      "input_ok": 98,
+      "input_filtered": 28,
+      "valid_loose": 122,
+      "valid_strict": 95
+    }
+  },
+  "examples": [
+    {
+      "program": "BitBench_uuencode",
+      "variant": "O0",
+      "active_pid_count": 36,
+      "active_window_ratio": 0.0181,
+      "wall_time_sec": 60.399726,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/BitBench_uuencode_20260426_223248",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "FreeBench_analyzer",
+      "variant": "O0",
+      "active_pid_count": 56,
+      "active_window_ratio": 0.061336,
+      "wall_time_sec": 60.924114,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/FreeBench_analyzer_20260426_224950",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "FreeBench_distray",
+      "variant": "O0",
+      "active_pid_count": 54,
+      "active_window_ratio": 0.084507,
+      "wall_time_sec": 60.904905,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/FreeBench_distray_20260426_225839",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "FreeBench_pcompress2",
+      "variant": "O0",
+      "active_pid_count": 55,
+      "active_window_ratio": 0.099099,
+      "wall_time_sec": 60.884746,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/FreeBench_pcompress2_20260426_225510",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "MallocBench_gs",
+      "variant": "O0",
+      "active_pid_count": 40,
+      "active_window_ratio": 0.021775,
+      "wall_time_sec": 60.280294,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/MallocBench_gs_20260426_230919",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "McCat_01-qbsort",
+      "variant": "O0",
+      "active_pid_count": 49,
+      "active_window_ratio": 0.045328,
+      "wall_time_sec": 60.05871,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/McCat_01-qbsort_20260426_231022",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "McCat_04-bisect",
+      "variant": "O0",
+      "active_pid_count": 41,
+      "active_window_ratio": 0.048235,
+      "wall_time_sec": 60.999174,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/McCat_04-bisect_20260426_230455",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "McCat_08-main",
+      "variant": "O0",
+      "active_pid_count": 43,
+      "active_window_ratio": 0.028458,
+      "wall_time_sec": 60.113689,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/McCat_08-main_20260426_230715",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "McCat_09-vor",
+      "variant": "O0",
+      "active_pid_count": 58,
+      "active_window_ratio": 0.099315,
+      "wall_time_sec": 60.929823,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/McCat_09-vor_20260426_230819",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    },
+    {
+      "program": "McCat_17-bintr",
+      "variant": "O0",
+      "active_pid_count": 53,
+      "active_window_ratio": 0.08006,
+      "wall_time_sec": 60.865027,
+      "output_dir": "/home/ssy/mem-profiler/data/llvm_test_suite/bcc/O0/McCat_17-bintr_20260426_231027",
+      "time_score_invalid_reasons": "low_active_window_ratio"
+    }
+  ]
+}

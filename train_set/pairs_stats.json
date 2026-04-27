@@ -1,21 +1,21 @@
 {
-  "n_pairs": 1740,
-  "n_programs": 145,
+  "n_pairs": 1494,
+  "n_programs": 129,
   "feature_dim": 54,
   "input_dim": 162,
   "tie_threshold": 0.05,
   "label_counts": {
-    "j_better": 684,
-    "i_better": 684,
-    "tie": 372
+    "j_better": 643,
+    "i_better": 643,
+    "tie": 208
   },
   "log_ratio_stats": {
     "mean": 0.0,
-    "std": 2.1906,
-    "min": -12.4298,
-    "max": 12.4298,
-    "p25": -0.7007,
+    "std": 1.8576,
+    "min": -9.2968,
+    "max": 9.2968,
+    "p25": -0.8678,
     "median": 0.0,
-    "p75": 0.7007
+    "p75": 0.8678
   }
 }

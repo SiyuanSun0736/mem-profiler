@@ -5,13 +5,17 @@ evaluate_score_vs_time.py — 模型分数对时间评分的外部验证
 
 验证维度
 --------
-1. 代理标签 vs 时间参考
-     proxy label (score_gt) vs score_time
-   衡量 cycles_per_iter 作为 wall-time 代理的可靠性
+1. 代理标签 vs 严格时间参考
+      proxy label (score_gt) vs strict score_time
+    衡量 cycles_per_iter 作为 wall-time 代理的可靠性
 
-2. 模型分数 vs 时间参考
-     model score (score_log) vs score_time
-   衡量模型在真实时间维度的泛化性
+2. 模型分数 vs 严格时间参考
+      model score (score_log) vs strict score_time
+    衡量模型在真实时间维度的泛化性
+
+3. loose vs strict 对照
+    若 time_scores.parquet 同时提供 `score_time_loose` 与严格 `score_time`，
+    则同时输出过滤前后对照指标，直接观察时间真值过滤是否提升一致性。
 
 指标
 ----
@@ -25,7 +29,8 @@ evaluate_score_vs_time.py — 模型分数对时间评分的外部验证
   band_acc_proxy    : 档位一致率（以 score_time 为真值，score_gt 做预测）
   dir_acc_model     : 方向一致率：sign(score_log) == sign(score_time)
   dir_acc_proxy     : 方向一致率：sign(score_gt)  == sign(score_time)
-  n_valid           : 参与计算的 (program, variant) 数量
+    n_valid           : 参与 loose 对照统计的 (program, variant) 数量
+    n_clean           : 参与 strict 主统计的 (program, variant) 数量
 
 档位分界（与 score_program.py 一致，对 score_time 做百分位归一化后划分）
   [0,25)  → poor
@@ -50,7 +55,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import pathlib
 import sys
 
@@ -85,7 +89,7 @@ def parse_args() -> argparse.Namespace:
         "--min-active-pids",
         type=int,
         default=5,
-        help="过滤 active_pid_count 过低的行（默认 5；这些行对应程序几乎未运行，指标不可靠）",
+        help="兼容旧版 time_scores.parquet 的回退过滤门槛；若文件已包含严格 score_time，则该参数不参与主流程",
     )
     return p.parse_args()
 
@@ -139,6 +143,45 @@ def _dir_acc(pred: np.ndarray, ref: np.ndarray) -> float:
     return float(np.mean(np.sign(pred[mask]) == np.sign(ref[mask])))
 
 
+def _build_metrics_block(df: pd.DataFrame, time_col: str) -> dict[str, float]:
+    gt = df["score_gt"].values.astype(float)
+    pred = df["score_log"].values.astype(float)
+    time = df[time_col].values.astype(float)
+
+    ref_min = float(gt.min())
+    ref_max = float(gt.max())
+
+    scored = df.copy()
+    scored["score_100_proxy"] = _normalize_to_100(scored["score_gt"], ref_min, ref_max)
+    scored["score_100_model"] = _normalize_to_100(scored["score_log"], ref_min, ref_max)
+    scored["score_100_time"] = _normalize_to_100(scored[time_col], ref_min, ref_max)
+
+    scored["band_proxy"] = _to_band(scored["score_100_proxy"])
+    scored["band_model"] = _to_band(scored["score_100_model"])
+    scored["band_time"] = _to_band(scored["score_100_time"])
+
+    return {
+        "mae_proxy_time": round(_mae(gt, time), 6),
+        "corr_proxy_time": round(_pearson(gt, time), 6),
+        "spearman_proxy": round(_spearman(gt, time), 6),
+        "dir_acc_proxy": round(_dir_acc(gt, time), 6),
+        "band_acc_proxy": round(
+            float((scored["band_proxy"] == scored["band_time"]).mean()), 6
+        ),
+        "mae_model_time": round(_mae(pred, time), 6),
+        "corr_model_time": round(_pearson(pred, time), 6),
+        "spearman_model": round(_spearman(pred, time), 6),
+        "dir_acc_model": round(_dir_acc(pred, time), 6),
+        "band_acc_model": round(
+            float((scored["band_model"] == scored["band_time"]).mean()), 6
+        ),
+        "score_time_mean": round(float(np.mean(time)), 6),
+        "score_time_std": round(float(np.std(time)), 6),
+        "ref_min_gt": round(ref_min, 6),
+        "ref_max_gt": round(ref_max, 6),
+    }
+
+
 def main() -> None:
     args = parse_args()
     scores_path = pathlib.Path(args.scores)
@@ -161,101 +204,133 @@ def main() -> None:
     print(f"[info] time_scores.parquet : {len(ts)} 行", flush=True)
 
     # ── 合并 ───────────────────────────────────────────────────────────────────
+    merge_cols = [
+        "program",
+        "variant",
+        "score_time",
+        "time_per_iter",
+        "active_pid_count",
+        "active_window_ratio",
+        "time_score_input_ok",
+        "has_strict_baseline",
+        "time_score_invalid_reasons",
+    ]
+    if "score_time_loose" in ts.columns:
+        merge_cols.append("score_time_loose")
+
     merged = scores.merge(
-        ts[["program", "variant", "score_time", "time_per_iter", "active_pid_count"]],
+        ts[[c for c in merge_cols if c in ts.columns]],
         on=["program", "variant"],
         how="inner",
     )
-    merged = merged.dropna(subset=["score_time", "score_log", "score_gt"])
-    n_valid = len(merged)
-    print(f"[info] 合并后有效行数: {n_valid}", flush=True)
+
+    loose_time_col = "score_time_loose" if "score_time_loose" in merged.columns else "score_time"
+    merged_loose = merged.dropna(subset=[loose_time_col, "score_log", "score_gt"]).copy()
+    n_valid = len(merged_loose)
+    print(f"[info] loose 对照有效行数: {n_valid}", flush=True)
 
     if n_valid < 2:
         print("[warn] 样本太少，无法计算相关性", file=sys.stderr)
         sys.exit(1)
 
-    # ── 可靠性过滤 ─────────────────────────────────────────────────────────────
-    # active_pid_count 过低表示该程序在采集窗口内几乎没有运行（可能崩溃/超慢），
-    # 此时 cycles_per_iter 和 time_per_iter 均不可信。
-    min_pids = args.min_active_pids
-    reliable_mask = merged["active_pid_count"] >= min_pids
-    n_excluded = int((~reliable_mask).sum())
-    if n_excluded:
-        excluded_progs = merged.loc[~reliable_mask, ["program", "variant", "active_pid_count"]]
-        print(f"[warn] 过滤 {n_excluded} 行（active_pid_count < {min_pids}）:", flush=True)
-        print(excluded_progs.to_string(index=False), flush=True)
-    merged_clean = merged[reliable_mask].copy()
+    if "score_time_loose" not in merged.columns:
+        min_pids = args.min_active_pids
+        strict_mask = merged_loose["active_pid_count"] >= min_pids
+        merged_clean = merged_loose[strict_mask].copy()
+        n_excluded = int((~strict_mask).sum())
+        strict_reason_counts = {
+            "low_active_pid_count": n_excluded,
+            "low_active_window_ratio": 0,
+            "missing_strict_baseline": 0,
+        }
+        strict_filter_mode = "legacy-active-pids-fallback"
+        print(
+            f"[warn] time_scores.parquet 缺少 strict 列，回退到 active_pid_count >= {min_pids} 过滤",
+            flush=True,
+        )
+    else:
+        merged_clean = merged.dropna(subset=["score_time", "score_log", "score_gt"]).copy()
+        n_excluded = int(n_valid - len(merged_clean))
+        strict_excluded = merged_loose[merged_loose["score_time"].isna()].copy()
+        reasons = strict_excluded.get("time_score_invalid_reasons")
+        strict_reason_counts = {
+            "low_active_pid_count": int(
+                reasons.fillna("").str.contains("low_active_pid_count").sum()
+            ) if reasons is not None else 0,
+            "low_active_window_ratio": int(
+                reasons.fillna("").str.contains("low_active_window_ratio").sum()
+            ) if reasons is not None else 0,
+            "missing_strict_baseline": int(
+                (
+                    strict_excluded.get("time_score_input_ok", pd.Series(False, index=strict_excluded.index))
+                    & ~strict_excluded.get("has_strict_baseline", pd.Series(False, index=strict_excluded.index))
+                ).sum()
+            ),
+        }
+        strict_filter_mode = "strict-time-score"
+
     n_clean = len(merged_clean)
-    print(f"[info] 过滤后有效行数: {n_clean}", flush=True)
+    print(f"[info] strict 主统计有效行数: {n_clean}", flush=True)
 
-    # ── 计算 0-100 归一化（使用 score_gt 的全局分布作为参考尺度） ──────────────
-    gt_vals = merged_clean["score_gt"].values
-    ref_min = float(gt_vals.min())
-    ref_max = float(gt_vals.max())
+    if n_clean < 2:
+        print("[warn] strict 时间真值样本太少，无法计算主统计", file=sys.stderr)
+        sys.exit(1)
 
-    merged_clean = merged_clean.copy()
-    merged_clean["score_100_proxy"]  = _normalize_to_100(merged_clean["score_gt"],   ref_min, ref_max)
-    merged_clean["score_100_model"]  = _normalize_to_100(merged_clean["score_log"],  ref_min, ref_max)
-    merged_clean["score_100_time"]   = _normalize_to_100(merged_clean["score_time"], ref_min, ref_max)
-
-    merged_clean["band_proxy"] = _to_band(merged_clean["score_100_proxy"])
-    merged_clean["band_model"] = _to_band(merged_clean["score_100_model"])
-    merged_clean["band_time"]  = _to_band(merged_clean["score_100_time"])
-
-    # ── 计算指标 ───────────────────────────────────────────────────────────────
-    gt   = merged_clean["score_gt"].values.astype(float)
-    pred = merged_clean["score_log"].values.astype(float)
-    time = merged_clean["score_time"].values.astype(float)
-
-    # 同时对全量（含不可靠行）计算一次，便于对比
-    gt_all   = merged["score_gt"].values.astype(float)
-    pred_all = merged["score_log"].values.astype(float)
-    time_all = merged["score_time"].values.astype(float)
+    strict_metrics = _build_metrics_block(merged_clean, "score_time")
+    loose_metrics = _build_metrics_block(merged_loose, loose_time_col)
 
     results: dict[str, object] = {
         "n_valid": n_valid,
+        "n_valid_loose": n_valid,
         "n_excluded": n_excluded,
         "n_clean": n_clean,
-        "min_active_pids_threshold": min_pids,
-        # ── 过滤后（可靠行）──────────────────────────────────────────────
-        # 代理标签 vs 时间参考
-        "mae_proxy_time":   round(_mae(gt, time), 6),
-        "corr_proxy_time":  round(_pearson(gt, time), 6),
-        "spearman_proxy":   round(_spearman(gt, time), 6),
-        "dir_acc_proxy":    round(_dir_acc(gt, time), 6),
-        "band_acc_proxy":   round(
-            float((merged_clean["band_proxy"] == merged_clean["band_time"]).mean()), 6
-        ),
-        # 模型分数 vs 时间参考
-        "mae_model_time":   round(_mae(pred, time), 6),
-        "corr_model_time":  round(_pearson(pred, time), 6),
-        "spearman_model":   round(_spearman(pred, time), 6),
-        "dir_acc_model":    round(_dir_acc(pred, time), 6),
-        "band_acc_model":   round(
-            float((merged_clean["band_model"] == merged_clean["band_time"]).mean()), 6
-        ),
-        # ── 全量（含不可靠行，供参考） ─────────────────────────────────
+        "n_valid_strict": n_clean,
+        "strict_filter_mode": strict_filter_mode,
+        "min_active_pids_threshold": args.min_active_pids,
+        "loose_time_column": loose_time_col,
+        "strict_filter": {
+            "n_excluded_from_loose": n_excluded,
+            "reasons": strict_reason_counts,
+        },
+        # ── strict 主统计 ────────────────────────────────────────────────
+        "mae_proxy_time": strict_metrics["mae_proxy_time"],
+        "corr_proxy_time": strict_metrics["corr_proxy_time"],
+        "spearman_proxy": strict_metrics["spearman_proxy"],
+        "dir_acc_proxy": strict_metrics["dir_acc_proxy"],
+        "band_acc_proxy": strict_metrics["band_acc_proxy"],
+        "mae_model_time": strict_metrics["mae_model_time"],
+        "corr_model_time": strict_metrics["corr_model_time"],
+        "spearman_model": strict_metrics["spearman_model"],
+        "dir_acc_model": strict_metrics["dir_acc_model"],
+        "band_acc_model": strict_metrics["band_acc_model"],
+        # 参考尺度
+        "score_time_mean": strict_metrics["score_time_mean"],
+        "score_time_std": strict_metrics["score_time_std"],
+        "ref_min_gt": strict_metrics["ref_min_gt"],
+        "ref_max_gt": strict_metrics["ref_max_gt"],
+        # ── loose 对照 ─────────────────────────────────────────────────
         "unfiltered": {
             "n": n_valid,
-            "mae_proxy_time":  round(_mae(gt_all, time_all), 6),
-            "corr_proxy_time": round(_pearson(gt_all, time_all), 6),
-            "spearman_proxy":  round(_spearman(gt_all, time_all), 6),
-            "mae_model_time":  round(_mae(pred_all, time_all), 6),
-            "corr_model_time": round(_pearson(pred_all, time_all), 6),
-            "spearman_model":  round(_spearman(pred_all, time_all), 6),
+            "mae_proxy_time": loose_metrics["mae_proxy_time"],
+            "corr_proxy_time": loose_metrics["corr_proxy_time"],
+            "spearman_proxy": loose_metrics["spearman_proxy"],
+            "dir_acc_proxy": loose_metrics["dir_acc_proxy"],
+            "band_acc_proxy": loose_metrics["band_acc_proxy"],
+            "mae_model_time": loose_metrics["mae_model_time"],
+            "corr_model_time": loose_metrics["corr_model_time"],
+            "spearman_model": loose_metrics["spearman_model"],
+            "dir_acc_model": loose_metrics["dir_acc_model"],
+            "band_acc_model": loose_metrics["band_acc_model"],
+            "score_time_mean": loose_metrics["score_time_mean"],
+            "score_time_std": loose_metrics["score_time_std"],
         },
-        # 参考尺度
-        "score_time_mean": round(float(np.mean(time)), 6),
-        "score_time_std":  round(float(np.std(time)), 6),
-        "ref_min_gt":      round(ref_min, 6),
-        "ref_max_gt":      round(ref_max, 6),
     }
 
     # ── 打印摘要 ───────────────────────────────────────────────────────────────
     print()
     print("═" * 58)
     print("  时间评分外部验证结果")
-    print(f"  （可靠行 {n_clean}/{n_valid}，已排除 active_pid_count < {min_pids} 的行）")
+    print(f"  （strict 主统计 {n_clean}/{n_valid}；mode={strict_filter_mode}）")
     print("═" * 58)
     print(f"  {'代理标签 (score_gt) vs score_time':36s}")
     print(f"    MAE          = {results['mae_proxy_time']:.4f}")
@@ -271,8 +346,14 @@ def main() -> None:
     print(f"    方向一致率   = {results['dir_acc_model']:.4f}")
     print(f"    档位一致率   = {results['band_acc_model']:.4f}")
     print()
+    print("  strict 过滤摘要:")
+    print(f"    从 loose 排除 = {results['strict_filter']['n_excluded_from_loose']}")
+    print(
+        f"    reasons       = {results['strict_filter']['reasons']}",
+    )
+    print()
     uf = results["unfiltered"]
-    print("  全量（含不可靠行，供参考）:")
+    print("  loose 对照（过滤前）:")
     print(f"    proxy: corr={uf['corr_proxy_time']:.4f}  spearman={uf['spearman_proxy']:.4f}")
     print(f"    model: corr={uf['corr_model_time']:.4f}  spearman={uf['spearman_model']:.4f}")
     print("═" * 58)

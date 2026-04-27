@@ -33,7 +33,12 @@ from torch.utils.data import DataLoader, TensorDataset
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 TIE_THRESHOLD = 0.05
+NEAR_TIE_THRESHOLD = 0.25
 LOG_RATIO_CLIP = 6.0          # 裁剪极端 log_ratio（±6σ ≈ 400x cycles 差异）
+DEFAULT_TIE_REG_WEIGHT = 0.35
+DEFAULT_NEAR_TIE_REG_WEIGHT = 0.65
+DEFAULT_AUX_CLASS_LAMBDA = 0.20
+DEFAULT_CLASS_BALANCE_POWER = 0.50
 
 # ── 微调预设（参考 Siamese-MicroPerf tuned_configs.py）──────────────────────
 # 机制：fixed_work — log_ratio = log(cycles_j / cycles_i)，clip ±6
@@ -41,8 +46,10 @@ LOG_RATIO_CLIP = 6.0          # 裁剪极端 log_ratio（±6σ ≈ 400x cycles �
 #
 # 参数说明
 # --------
-# huber_delta     : Huber loss 的 δ，越小越不敏感于极端 log_ratio
-# direction_lambda: 方向辅助损失权重（BCE on sign），0 表示纯回归
+# huber_delta       : Huber loss 的 δ，越小越不敏感于极端 log_ratio
+# direction_lambda  : 旧版方向辅助损失权重（BCE on sign），默认关闭
+# aux_class_lambda  : 3 类辅助头权重（i_better / tie / j_better）
+# near_tie_threshold: 小 |log_ratio| 分桶阈值，用于回归降权
 # noise_std       : 输入高斯噪声标准差（训练增广），0 表示关闭
 # patience        : 早停等待轮数
 TUNED_CONFIGS: dict[str, dict] = {
@@ -61,7 +68,12 @@ TUNED_CONFIGS: dict[str, dict] = {
         "patience":          55,
         "clip":             6.0,
         "huber_delta":       0.5,
-        "direction_lambda": 0.15,
+        "direction_lambda": 0.0,
+        "aux_class_lambda": DEFAULT_AUX_CLASS_LAMBDA,
+        "near_tie_threshold": NEAR_TIE_THRESHOLD,
+        "tie_reg_weight": DEFAULT_TIE_REG_WEIGHT,
+        "near_tie_reg_weight": DEFAULT_NEAR_TIE_REG_WEIGHT,
+        "class_balance_power": DEFAULT_CLASS_BALANCE_POWER,
         "noise_std":       0.008,
     },
     "fixed_work_transformer_strong": {
@@ -78,10 +90,17 @@ TUNED_CONFIGS: dict[str, dict] = {
         "patience":          60,
         "clip":             6.0,
         "huber_delta":       0.5,
-        "direction_lambda": 0.20,
+        "direction_lambda": 0.0,
+        "aux_class_lambda": DEFAULT_AUX_CLASS_LAMBDA,
+        "near_tie_threshold": NEAR_TIE_THRESHOLD,
+        "tie_reg_weight": DEFAULT_TIE_REG_WEIGHT,
+        "near_tie_reg_weight": DEFAULT_NEAR_TIE_REG_WEIGHT,
+        "class_balance_power": DEFAULT_CLASS_BALANCE_POWER,
         "noise_std":       0.010,
     },
 }
+
+MAGNITUDE_BIN_NAMES = ("tie", "near_tie", "far")
 
 # ── 特征列（与 build_pair_table.py / train_model.py 保持一致）───────────────
 NON_TIME_COLS: list[str] = [
@@ -231,7 +250,11 @@ class PairTransformer(nn.Module):
             batch_first=True,    # (batch, seq, d_model)
             norm_first=True,     # Pre-LN：训练更稳定
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_layers,
+            enable_nested_tensor=False,
+        )
 
         # 4. 回归头：输入 3 * d_model（out_i, out_j, diff）
         self.head = nn.Sequential(
@@ -239,6 +262,13 @@ class PairTransformer(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(head_hidden, 1),
+        )
+        # 5. 辅助分类头：预测 i_better / tie / j_better
+        self.cls_head = nn.Sequential(
+            nn.Linear(3 * d_model, head_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(head_hidden, 3),
         )
 
         self._init_weights()
@@ -252,7 +282,7 @@ class PairTransformer(nn.Module):
             elif isinstance(m, nn.Embedding):
                 nn.init.normal_(m.weight, std=0.02)
 
-    def forward(self, x_i: torch.Tensor, x_j: torch.Tensor) -> torch.Tensor:
+    def _encode_pair(self, x_i: torch.Tensor, x_j: torch.Tensor) -> torch.Tensor:
         # 投影：(batch, F) → (batch, d_model)
         h_i = self.proj(x_i)
         h_j = self.proj(x_j)
@@ -274,9 +304,21 @@ class PairTransformer(nn.Module):
         out_j = out[:, 1, :]               # (batch, d_model)
         diff  = out_i - out_j              # (batch, d_model)
 
-        # 回归头
-        cat   = torch.cat([out_i, out_j, diff], dim=-1)   # (batch, 3*d_model)
-        return self.head(cat).squeeze(-1)                  # (batch,)
+        return torch.cat([out_i, out_j, diff], dim=-1)    # (batch, 3*d_model)
+
+    def forward_with_aux(
+        self,
+        x_i: torch.Tensor,
+        x_j: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        cat = self._encode_pair(x_i, x_j)
+        reg = self.head(cat).squeeze(-1)
+        cls = self.cls_head(cat)
+        return reg, cls
+
+    def forward(self, x_i: torch.Tensor, x_j: torch.Tensor) -> torch.Tensor:
+        reg, _ = self.forward_with_aux(x_i, x_j)
+        return reg
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -288,6 +330,78 @@ def to_3class(log_ratio: np.ndarray) -> np.ndarray:
     cls[log_ratio >  TIE_THRESHOLD] = 0
     cls[log_ratio < -TIE_THRESHOLD] = 2
     return cls
+
+
+def magnitude_bin_ids(
+    log_ratio: np.ndarray,
+    near_tie_threshold: float = NEAR_TIE_THRESHOLD,
+) -> np.ndarray:
+    abs_lr = np.abs(log_ratio)
+    bins = np.full(len(log_ratio), 2, dtype=np.int8)
+    bins[abs_lr <= near_tie_threshold] = 1
+    bins[abs_lr <= TIE_THRESHOLD] = 0
+    return bins
+
+
+def magnitude_bin_counts(
+    log_ratio: np.ndarray,
+    near_tie_threshold: float = NEAR_TIE_THRESHOLD,
+) -> dict[str, int]:
+    bins = magnitude_bin_ids(log_ratio, near_tie_threshold=near_tie_threshold)
+    return {
+        MAGNITUDE_BIN_NAMES[idx]: int((bins == idx).sum())
+        for idx in range(len(MAGNITUDE_BIN_NAMES))
+    }
+
+
+def regression_sample_weights(
+    log_ratio: np.ndarray,
+    near_tie_threshold: float = NEAR_TIE_THRESHOLD,
+    tie_reg_weight: float = DEFAULT_TIE_REG_WEIGHT,
+    near_tie_reg_weight: float = DEFAULT_NEAR_TIE_REG_WEIGHT,
+) -> np.ndarray:
+    bins = magnitude_bin_ids(log_ratio, near_tie_threshold=near_tie_threshold)
+    weights = np.ones(len(log_ratio), dtype=np.float32)
+    weights[bins == 1] = float(near_tie_reg_weight)
+    weights[bins == 0] = float(tie_reg_weight)
+    return weights
+
+
+def balanced_class_weights(
+    label_int: np.ndarray,
+    power: float = DEFAULT_CLASS_BALANCE_POWER,
+) -> np.ndarray:
+    counts = np.bincount(label_int.astype(np.int64), minlength=3).astype(np.float32)
+    counts = np.maximum(counts, 1.0)
+    max_count = float(counts.max())
+    weights = np.power(max_count / counts, power).astype(np.float32)
+    weights = weights / weights.mean()
+    return weights
+
+
+def weighted_mean(loss_values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    denom = weights.sum().clamp_min(1e-8)
+    return (loss_values * weights).sum() / denom
+
+
+def direction_bce_loss(pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+    non_tie = y_true.abs() > TIE_THRESHOLD
+    if non_tie.sum() == 0:
+        return pred.new_tensor(0.0)
+    dir_target = (y_true[non_tie] > 0).float()
+    dir_logit  = pred[non_tie]
+    return nn.functional.binary_cross_entropy_with_logits(dir_logit, dir_target)
+
+
+def compute_aux_metrics(y_true: np.ndarray, cls_logits: np.ndarray) -> dict[str, float]:
+    true_cls = to_3class(y_true)
+    pred_cls = np.asarray(cls_logits).argmax(axis=1)
+    tie_mask = true_cls == 1
+    tie_recall = float(np.mean(pred_cls[tie_mask] == 1)) if tie_mask.sum() > 0 else float("nan")
+    return {
+        "aux_acc_3cls": round(float(np.mean(pred_cls == true_cls)), 4),
+        "aux_tie_recall": round(tie_recall, 4),
+    }
 
 
 def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
@@ -351,15 +465,23 @@ def make_tensors(
     df: pd.DataFrame,
     device: torch.device,
     clip: float = LOG_RATIO_CLIP,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """返回 (xi_tensor, xj_tensor, y_tensor)，y 被裁剪到 ±clip。"""
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """返回 (xi_tensor, xj_tensor, y_tensor, cls_tensor, reg_weight_tensor)。"""
     xi = df[[f"xi_{c}" for c in NON_TIME_COLS]].values.astype(np.float32)
     xj = df[[f"xj_{c}" for c in NON_TIME_COLS]].values.astype(np.float32)
-    y  = np.clip(df["log_ratio"].values.astype(np.float32), -clip, clip)
+    y_raw = df["log_ratio"].values.astype(np.float32)
+    y  = np.clip(y_raw, -clip, clip)
+    if "label_int" in df.columns:
+        y_cls = df["label_int"].values.astype(np.int64)
+    else:
+        y_cls = to_3class(y_raw).astype(np.int64)
+    reg_weight = regression_sample_weights(y_raw)
     return (
         torch.from_numpy(xi).to(device),
         torch.from_numpy(xj).to(device),
         torch.from_numpy(y).to(device),
+        torch.from_numpy(y_cls).to(device),
+        torch.from_numpy(reg_weight).to(device),
     )
 
 
@@ -380,6 +502,11 @@ def train(
     huber_delta:    float = 1.0,
     noise_std:      float = 0.0,
     direction_lambda: float = 0.0,
+    aux_class_lambda: float = DEFAULT_AUX_CLASS_LAMBDA,
+    near_tie_threshold: float = NEAR_TIE_THRESHOLD,
+    tie_reg_weight: float = DEFAULT_TIE_REG_WEIGHT,
+    near_tie_reg_weight: float = DEFAULT_NEAR_TIE_REG_WEIGHT,
+    class_balance_power: float = DEFAULT_CLASS_BALANCE_POWER,
 ) -> dict:
     """
     训练循环，返回 {'train_loss': [...], 'val_loss': [...]} 历史。
@@ -387,12 +514,31 @@ def train(
     huber_delta     : Huber loss δ（越小对极端样本越不敏感）
     noise_std       : 输入高斯噪声标准差（训练增广，0 = 关闭）
     direction_lambda: 方向辅助 BCE loss 权重（0 = 纯回归）
+    aux_class_lambda: 辅助 3 类头权重（0 = 关闭）
     """
-    xi_tr, xj_tr, y_tr = make_tensors(df_train, device)
-    xi_va, xj_va, y_va = make_tensors(df_val,   device)
+    xi_tr, xj_tr, y_tr, ycls_tr, regw_tr = make_tensors(df_train, device)
+    xi_va, xj_va, y_va, ycls_va, regw_va = make_tensors(df_val,   device)
+
+    # 使用调用方指定的阈值/权重覆盖默认 sample weight。
+    regw_tr = torch.from_numpy(
+        regression_sample_weights(
+            df_train["log_ratio"].values.astype(np.float32),
+            near_tie_threshold=near_tie_threshold,
+            tie_reg_weight=tie_reg_weight,
+            near_tie_reg_weight=near_tie_reg_weight,
+        )
+    ).to(device)
+    regw_va = torch.from_numpy(
+        regression_sample_weights(
+            df_val["log_ratio"].values.astype(np.float32),
+            near_tie_threshold=near_tie_threshold,
+            tie_reg_weight=tie_reg_weight,
+            near_tie_reg_weight=near_tie_reg_weight,
+        )
+    ).to(device)
 
     loader = DataLoader(
-        TensorDataset(xi_tr, xj_tr, y_tr),
+        TensorDataset(xi_tr, xj_tr, y_tr, ycls_tr, regw_tr),
         batch_size=batch_size,
         shuffle=True,
         drop_last=False,
@@ -404,70 +550,102 @@ def train(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=epochs, eta_min=lr * 0.01
     )
-    criterion = nn.HuberLoss(delta=huber_delta)
+    reg_criterion = nn.HuberLoss(delta=huber_delta, reduction="none")
+    class_weights = torch.from_numpy(
+        balanced_class_weights(
+            ycls_tr.detach().cpu().numpy(),
+            power=class_balance_power,
+        )
+    ).to(device)
+    cls_criterion = nn.CrossEntropyLoss(weight=class_weights)
 
     best_val  = float("inf")
     best_state: dict = {}
     no_improve = 0
-    history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
+    history: dict[str, list[float]] = {
+        "train_loss": [],
+        "val_loss": [],
+        "train_reg_loss": [],
+        "val_reg_loss": [],
+        "train_aux_class_loss": [],
+        "val_aux_class_loss": [],
+    }
 
     print(f"\n  {'Epoch':>5}  {'TrainLoss':>10}  {'ValLoss':>10}  {'ValR²':>7}  "
-          f"{'ValDir':>7}  {'LR':>8}  {'Time':>6}")
-    print("  " + "─" * 66)
+          f"{'ValDir':>7}  {'Val3Cls':>8}  {'LR':>8}  {'Time':>6}")
+    print("  " + "─" * 76)
 
     for epoch in range(1, epochs + 1):
         t0 = time.time()
         model.train()
         train_losses: list[float] = []
-        for xi_b, xj_b, y_b in loader:
+        train_reg_losses: list[float] = []
+        train_aux_losses: list[float] = []
+        for xi_b, xj_b, y_b, ycls_b, regw_b in loader:
             optimizer.zero_grad()
             # 输入噪声增广
             if noise_std > 0.0:
                 xi_b = xi_b + torch.randn_like(xi_b) * noise_std
                 xj_b = xj_b + torch.randn_like(xj_b) * noise_std
-            pred = model(xi_b, xj_b)
-            loss = criterion(pred, y_b)
-            # 方向辅助 BCE loss（仅在 |y_true| > TIE_THRESHOLD 的样本上）
+            pred, cls_logits = model.forward_with_aux(xi_b, xj_b)
+            reg_loss = weighted_mean(reg_criterion(pred, y_b), regw_b)
+            loss = reg_loss
+
+            aux_cls_loss = pred.new_tensor(0.0)
+            if aux_class_lambda > 0.0:
+                aux_cls_loss = cls_criterion(cls_logits, ycls_b)
+                loss = loss + aux_class_lambda * aux_cls_loss
+
             if direction_lambda > 0.0:
-                non_tie = y_b.abs() > TIE_THRESHOLD
-                if non_tie.sum() > 0:
-                    dir_target = (y_b[non_tie] > 0).float()
-                    dir_logit  = pred[non_tie]
-                    dir_loss   = nn.functional.binary_cross_entropy_with_logits(
-                        dir_logit, dir_target
-                    )
-                    loss = loss + direction_lambda * dir_loss
+                loss = loss + direction_lambda * direction_bce_loss(pred, y_b)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             train_losses.append(loss.item())
+            train_reg_losses.append(reg_loss.item())
+            train_aux_losses.append(aux_cls_loss.item())
         scheduler.step()
 
         # 验证
         model.eval()
         with torch.no_grad():
-            val_pred = model(xi_va, xj_va)
-            val_loss = criterion(val_pred, y_va).item()
+            val_pred, val_cls_logits = model.forward_with_aux(xi_va, xj_va)
+            val_reg_loss = weighted_mean(reg_criterion(val_pred, y_va), regw_va)
+            val_aux_cls_loss = (
+                cls_criterion(val_cls_logits, ycls_va)
+                if aux_class_lambda > 0.0
+                else val_pred.new_tensor(0.0)
+            )
+            val_loss = val_reg_loss + aux_class_lambda * val_aux_cls_loss
+            if direction_lambda > 0.0:
+                val_loss = val_loss + direction_lambda * direction_bce_loss(val_pred, y_va)
 
         train_loss = float(np.mean(train_losses))
         history["train_loss"].append(train_loss)
-        history["val_loss"].append(val_loss)
+        history["val_loss"].append(float(val_loss.item()))
+        history["train_reg_loss"].append(float(np.mean(train_reg_losses)))
+        history["val_reg_loss"].append(float(val_reg_loss.item()))
+        history["train_aux_class_loss"].append(float(np.mean(train_aux_losses)))
+        history["val_aux_class_loss"].append(float(val_aux_cls_loss.item()))
 
         # 每 10 个 epoch 打印一次
         if epoch % 10 == 0 or epoch == 1:
             vp_np = val_pred.cpu().float().numpy()
             yt_np = y_va.cpu().float().numpy()
             m = compute_metrics(yt_np, vp_np)
+            aux_m = compute_aux_metrics(yt_np, val_cls_logits.cpu().float().numpy())
             elapsed = time.time() - t0
             cur_lr  = scheduler.get_last_lr()[0]
             print(
-                f"  {epoch:5d}  {train_loss:10.4f}  {val_loss:10.4f}  "
-                f"{m['r2']:7.4f}  {m['dir_acc']:7.4f}  {cur_lr:8.2e}  {elapsed:5.1f}s"
+                f"  {epoch:5d}  {train_loss:10.4f}  {float(val_loss.item()):10.4f}  "
+                f"{m['r2']:7.4f}  {m['dir_acc']:7.4f}  {aux_m['aux_acc_3cls']:8.4f}  "
+                f"{cur_lr:8.2e}  {elapsed:5.1f}s"
             )
 
         # Early stopping
-        if val_loss < best_val - 1e-5:
-            best_val = val_loss
+        val_loss_scalar = float(val_loss.item())
+        if val_loss_scalar < best_val - 1e-5:
+            best_val = val_loss_scalar
             best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             no_improve = 0
         else:
@@ -501,6 +679,23 @@ def predict_np(
         df[[f"xj_{c}" for c in NON_TIME_COLS]].values.astype(np.float32)
     ).to(device)
     return model(xi, xj).cpu().float().numpy()
+
+
+@torch.no_grad()
+def predict_with_aux_np(
+    model: PairTransformer,
+    df: pd.DataFrame,
+    device: torch.device,
+) -> tuple[np.ndarray, np.ndarray]:
+    model.eval()
+    xi = torch.from_numpy(
+        df[[f"xi_{c}" for c in NON_TIME_COLS]].values.astype(np.float32)
+    ).to(device)
+    xj = torch.from_numpy(
+        df[[f"xj_{c}" for c in NON_TIME_COLS]].values.astype(np.float32)
+    ).to(device)
+    pred, cls_logits = model.forward_with_aux(xi, xj)
+    return pred.cpu().float().numpy(), cls_logits.cpu().float().numpy()
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗
@@ -543,7 +738,22 @@ def main() -> None:
     parser.add_argument("--huber-delta",      type=float, default=1.0,  dest="huber_delta",
                         help="Huber loss delta")
     parser.add_argument("--direction-lambda", type=float, default=0.0,  dest="direction_lambda",
-                        help="方向辅助 BCE loss 权重（0=关闭）")
+                        help="旧版方向辅助 BCE loss 权重（0=关闭）")
+    parser.add_argument("--aux-class-lambda", type=float, default=DEFAULT_AUX_CLASS_LAMBDA,
+                        dest="aux_class_lambda",
+                        help="辅助 3 类头 loss 权重（i_better/tie/j_better）")
+    parser.add_argument("--near-tie-threshold", type=float, default=NEAR_TIE_THRESHOLD,
+                        dest="near_tie_threshold",
+                        help="小 |log_ratio| 分桶阈值；介于 tie 阈值和该值之间的样本按 near_tie 处理")
+    parser.add_argument("--tie-reg-weight", type=float, default=DEFAULT_TIE_REG_WEIGHT,
+                        dest="tie_reg_weight",
+                        help="|log_ratio| <= tie 阈值时的回归样本权重")
+    parser.add_argument("--near-tie-reg-weight", type=float, default=DEFAULT_NEAR_TIE_REG_WEIGHT,
+                        dest="near_tie_reg_weight",
+                        help="tie 阈值 < |log_ratio| <= near_tie_threshold 时的回归样本权重")
+    parser.add_argument("--class-balance-power", type=float, default=DEFAULT_CLASS_BALANCE_POWER,
+                        dest="class_balance_power",
+                        help="辅助分类头的类频次平衡强度；0=不平衡，1=完全按逆频次")
     parser.add_argument("--noise-std",        type=float, default=0.0,  dest="noise_std",
                         help="输入高斯噪声标准差（训练增广，0=关闭）")
     parser.add_argument("--device",   default=None,
@@ -591,9 +801,16 @@ def main() -> None:
             f"{c}={part['label_class'].value_counts().get(c, 0)}"
             for c in ["i_better", "tie", "j_better"]
         )
+        mag_bins = magnitude_bin_counts(
+            part["log_ratio"].values.astype(np.float32),
+            near_tie_threshold=args.near_tie_threshold,
+        )
+        mag_dist = "  ".join(
+            f"{k}={mag_bins.get(k, 0)}" for k in MAGNITUDE_BIN_NAMES
+        )
         print(
             f"  {name:5s}: {part['program'].nunique():3d} 程序  "
-            f"{len(part):5d} 对  label分布: {dist}"
+            f"{len(part):5d} 对  label分布: {dist}  |  |log_ratio|分桶: {mag_dist}"
         )
 
     # ── Step 2: 朴素基准 ──────────────────────────────────────────────────
@@ -631,7 +848,10 @@ def main() -> None:
     config_label = f"[预设: {args.config}]  " if args.config else ""
     print(
         f"  {config_label}HuberLoss(δ={args.huber_delta})  "
-        f"dir_λ={args.direction_lambda}  noise={args.noise_std}  "
+        f"dir_λ={args.direction_lambda}  aux_cls_λ={args.aux_class_lambda}  "
+        f"near_tie≤{args.near_tie_threshold}  "
+        f"w_tie={args.tie_reg_weight}  w_near={args.near_tie_reg_weight}  "
+        f"noise={args.noise_std}  "
         f"AdamW lr={args.lr}  wd={args.wd}"
     )
 
@@ -648,6 +868,11 @@ def main() -> None:
         huber_delta=args.huber_delta,
         noise_std=args.noise_std,
         direction_lambda=args.direction_lambda,
+        aux_class_lambda=args.aux_class_lambda,
+        near_tie_threshold=args.near_tie_threshold,
+        tie_reg_weight=args.tie_reg_weight,
+        near_tie_reg_weight=args.near_tie_reg_weight,
+        class_balance_power=args.class_balance_power,
     )
 
     # ── Step 4: 评估 ──────────────────────────────────────────────────────
@@ -657,24 +882,25 @@ def main() -> None:
 
     header = (
         f"  {'split':5s} | {'MAE':>7} {'RMSE':>7} {'R²':>7} "
-        f"{'dir_acc':>8} {'acc_3cls':>9}"
+        f"{'dir_acc':>8} {'acc_3cls':>9} {'aux_3cls':>9} {'tie_rec':>8}"
     )
     print(header)
     print("  " + "─" * (len(header) - 2))
 
     results: dict[str, dict] = {}
     for name, part in [("train", df_train), ("val", df_val), ("test", df_test)]:
-        y_pred = predict_np(model, part, device)
+        y_pred, cls_logits = predict_with_aux_np(model, part, device)
         y_true = part["log_ratio"].values.astype(np.float32)
         m = compute_metrics(y_true, y_pred)
+        m.update(compute_aux_metrics(y_true, cls_logits))
         results[name] = m
         print(
             f"  {name:5s} | {m['mae']:7.4f} {m['rmse']:7.4f} {m['r2']:7.4f} "
-            f"{m['dir_acc']:>8} {m['acc_3cls']:9.3f}"
+            f"{m['dir_acc']:>8} {m['acc_3cls']:9.3f} {m['aux_acc_3cls']:9.3f} {m['aux_tie_recall']:8.3f}"
         )
 
     # ── Step 5: 按 variant 对细分 ─────────────────────────────────────────
-    print("\n[info] test 集按 variant 对的方向准确率：")
+    print("\n[info] test 集按 variant 对的回归/辅助分类表现：")
     per_pair: dict[str, dict] = {}
     for vi in ["O0", "O1", "O2"]:
         for vj in ["O1", "O2", "O3"]:
@@ -684,13 +910,15 @@ def main() -> None:
             if mask.sum() == 0:
                 continue
             sub = df_test[mask]
-            yp  = predict_np(model, sub, device)
+            yp, cls_logits = predict_with_aux_np(model, sub, device)
             yt  = sub["log_ratio"].values.astype(np.float32)
             m   = compute_metrics(yt, yp)
+            m.update(compute_aux_metrics(yt, cls_logits))
             per_pair[f"{vi}-{vj}"] = m
             print(
                 f"  {vi}-{vj}: n={m['n']:3d}  "
-                f"dir_acc={m['dir_acc']}  acc_3cls={m['acc_3cls']:.3f}"
+                f"dir_acc={m['dir_acc']}  reg_acc_3cls={m['acc_3cls']:.3f}  "
+                f"aux_acc_3cls={m['aux_acc_3cls']:.3f}"
             )
 
     # ── 保存模型 ──────────────────────────────────────────────────────────
@@ -703,7 +931,9 @@ def main() -> None:
                 "feat_dim":       F,
                 "d_model":        args.d_model,
                 "nhead":          args.nhead,
+                "nlayers":        args.nlayers,
                 "num_layers":     args.nlayers,
+                "ffn_dim":        args.ffn_dim,
                 "dim_feedforward":args.ffn_dim,
                 "dropout":        args.dropout,
             },
@@ -718,11 +948,21 @@ def main() -> None:
         "architecture":   (
             f"[xi;xj]→proj(F→{args.d_model})→TokenTypeEmb→"
             f"TransformerEncoder({args.nlayers}L,{args.nhead}H,ffn={args.ffn_dim})"
-            f"→[out_i;out_j;out_i-out_j]→head({3*args.d_model}→{64}→1)"
+            f"→[out_i;out_j;out_i-out_j]→reg_head({3*args.d_model}→{64}→1)"
+            f"+cls_head({3*args.d_model}→{64}→3)"
         ),
         "n_params":       n_params,
         "device":         str(device),
         "log_ratio_clip": args.clip,
+        "tie_strategy": {
+            "tie_threshold": TIE_THRESHOLD,
+            "near_tie_threshold": args.near_tie_threshold,
+            "tie_reg_weight": args.tie_reg_weight,
+            "near_tie_reg_weight": args.near_tie_reg_weight,
+            "aux_class_lambda": args.aux_class_lambda,
+            "class_balance_power": args.class_balance_power,
+            "direction_lambda": args.direction_lambda,
+        },
         "splits": {
             "train_programs": int(df_train["program"].nunique()),
             "val_programs":   int(df_val["program"].nunique()),
@@ -730,6 +970,13 @@ def main() -> None:
             "train_pairs":    len(df_train),
             "val_pairs":      len(df_val),
             "test_pairs":     len(df_test),
+        },
+        "split_magnitude_bins": {
+            name: magnitude_bin_counts(
+                part["log_ratio"].values.astype(np.float32),
+                near_tie_threshold=args.near_tie_threshold,
+            )
+            for name, part in [("train", df_train), ("val", df_val), ("test", df_test)]
         },
         "results":   results,
         "per_pair":  per_pair,

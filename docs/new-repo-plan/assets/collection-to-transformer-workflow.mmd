@@ -1,0 +1,34 @@
+flowchart TD
+    A[准备 bin 与 test 目录] --> B[运行采集脚本<br/>collect_dataset_all_variants.sh<br/>或 collect_dataset_testbench.sh]
+    B --> C[输出原始 run 目录<br/>run_metadata.jsonl<br/>window_metrics.jsonl]
+    C --> D[自动去重<br/>dedup_dataset_variant.py<br/>重建 manifest_bcc_O*]
+    D --> E{是否冻结训练快照}
+    E -- 是 --> F[freeze_curated_manifest.py<br/>生成 manifest_curated_O*]
+    E -- 否 --> G[直接使用 manifest_bcc_O*]
+    F --> H[build_run_features.py<br/>聚合窗口特征<br/>输出 run_features 与 zscore]
+    G --> H
+    H --> I[build_pair_table.py<br/>构造 pairs.parquet]
+    H --> J[build_anchor_set.py<br/>构造 anchor_set.parquet]
+    I --> K[train_transformer.py<br/>PairTransformer 训练]
+    K --> L[model_transformer.pt<br/>model_transformer_eval.json]
+    J --> M[score_program.py<br/>单程序评分]
+    K --> M
+
+    subgraph Raw Data Layer
+        C
+        D
+        F
+        G
+    end
+
+    subgraph Feature Layer
+        H
+        I
+        J
+    end
+
+    subgraph Model Layer
+        K
+        L
+        M
+    end

@@ -39,6 +39,7 @@
 #   OUTPUT_ROOT       BCC 输出根目录（默认 data/llvm_test_suite/bcc/<VARIANT>）
 #   MANIFEST          数据集清单路径（默认 data/llvm_test_suite/manifest_bcc_<VARIANT>.jsonl）
 #   SINGLE_SCRIPT     单基准采集脚本路径（默认 experiments/llvm_test_suite/collect_single_bcc_testbench.sh）
+#   DEDUP_SCRIPT      变体去重脚本路径（默认 experiments/llvm_test_suite/dedup_dataset_variant.py）
 #   PYTHON_BIN        Python 可执行文件（默认 python3）
 #   WINDOW_SEC        loader 时间窗大小，秒（默认 1.0）
 #   DURATION_SEC      单次采集总时长，秒（默认 60）
@@ -47,6 +48,7 @@
 #   OVERWRITE         1=总是重新采集，0=已有成功输出则跳过（默认 1）
 #   RETRY_MAX         每个基准最多重试次数（默认 2）
 #   DRYRUN            1=只解析和打印命令，不实际采集（默认 0）
+#   DEDUP_AFTER_COLLECT 1=采集结束后自动去重并重建 manifest（默认 1）
 #   EMIT_EVENTS       1=输出 events.jsonl（默认 0）
 #   ENABLE_LBR        1=打开 --lbr（隐含 emit-events，默认 0）
 #   PER_TID           1=按 TID 聚合（默认 0）
@@ -69,6 +71,7 @@ TEST_DIR="${TEST_DIR:-}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-}"
 MANIFEST="${MANIFEST:-}"
 SINGLE_SCRIPT="${SINGLE_SCRIPT:-$SCRIPT_DIR/collect_single_bcc_testbench.sh}"
+DEDUP_SCRIPT="${DEDUP_SCRIPT:-$SCRIPT_DIR/dedup_dataset_variant.py}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 WINDOW_SEC="${WINDOW_SEC:-1.0}"
@@ -78,6 +81,7 @@ BENCH_FILTER="${BENCH_FILTER:-}"
 OVERWRITE="${OVERWRITE:-1}"
 RETRY_MAX="${RETRY_MAX:-2}"
 DRYRUN="${DRYRUN:-0}"
+DEDUP_AFTER_COLLECT="${DEDUP_AFTER_COLLECT:-1}"
 EMIT_EVENTS="${EMIT_EVENTS:-0}"
 ENABLE_LBR="${ENABLE_LBR:-0}"
 PER_TID="${PER_TID:-0}"
@@ -326,6 +330,10 @@ cd "$PROJECT_ROOT"
     exit 1
 }
 [[ -f "$SINGLE_SCRIPT" ]] || { echo "Error: 单基准脚本不存在: $SINGLE_SCRIPT" >&2; exit 1; }
+[[ "$DRYRUN" -eq 1 || "$DEDUP_AFTER_COLLECT" -eq 0 || -f "$DEDUP_SCRIPT" ]] || {
+    echo "Error: 去重脚本不存在: $DEDUP_SCRIPT" >&2
+    exit 1
+}
 [[ -f "$PROJECT_ROOT/src/loader.py" ]] || { echo "Error: loader.py 不存在" >&2; exit 1; }
 
 LOG_TS=$(date +%Y%m%d_%H%M%S)
@@ -356,6 +364,7 @@ info "DURATION_SEC:   ${DURATION_SEC}s"
 info "SAMPLE_RATE:    $SAMPLE_RATE"
 info "RETRY_MAX:      $RETRY_MAX"
 info "EXTRA_ARGS:     ${EXTRA_LOADER_ARGS:-<none>}"
+[[ "$DRYRUN" -eq 0 && "$DEDUP_AFTER_COLLECT" -eq 1 ]] && info "DEDUP_SCRIPT:   ${DEDUP_SCRIPT#$PROJECT_ROOT/}"
 [[ -n "$BENCH_FILTER" ]] && warn "★ 单基准模式：仅处理 '$BENCH_FILTER' ★"
 [[ "$DRYRUN" -eq 1 ]] && warn "★ DRYRUN 模式：仅解析命令，不执行采集 ★"
 echo
@@ -469,6 +478,25 @@ for test_subdir in "$TEST_DIR"/*/; do
     ((COUNT_OK++)) || true
     echo
 done
+
+if [[ "$DRYRUN" -eq 0 && "$DEDUP_AFTER_COLLECT" -eq 1 ]]; then
+    info "开始自动去重并重建 manifest"
+    "$PYTHON_BIN" "$DEDUP_SCRIPT" \
+        --variant "$VARIANT" \
+        --project-root "$PROJECT_ROOT" \
+        --output-root "$OUTPUT_ROOT" \
+        --manifest "$MANIFEST" \
+        --bin-dir "$BIN_DIR" \
+        --test-dir "$TEST_DIR" \
+        --window-sec "$WINDOW_SEC" \
+        --duration-sec "$DURATION_SEC" \
+        --sample-rate "$SAMPLE_RATE" \
+        || {
+            echo "Error: 自动去重失败: $DEDUP_SCRIPT" >&2
+            exit 1
+        }
+    echo
+fi
 
 bold "======================================================"
 printf "  总计: %d  |  成功: %d  |  跳过: %d\n" \

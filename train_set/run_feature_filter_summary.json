@@ -1,0 +1,144 @@
+{
+  "manifest_prefix": "manifest_curated",
+  "min_active_pids": 5,
+  "min_cycles_per_iter": 0.0,
+  "n_seen": 580,
+  "n_kept": 509,
+  "n_filtered": 71,
+  "reasons": {
+    "low_active_pid_count": 71,
+    "nonpositive_cycles_per_iter": 57
+  },
+  "by_variant": {
+    "O0": {
+      "seen": 145,
+      "kept": 128,
+      "filtered": 17
+    },
+    "O1": {
+      "seen": 145,
+      "kept": 127,
+      "filtered": 18
+    },
+    "O2": {
+      "seen": 145,
+      "kept": 128,
+      "filtered": 17
+    },
+    "O3": {
+      "seen": 145,
+      "kept": 126,
+      "filtered": 19
+    }
+  },
+  "examples": [
+    {
+      "program": "Bullet",
+      "variant": "O0",
+      "active_pid_count": 4,
+      "cycles_per_iter": 72881139839.33333,
+      "output_dir": "data/llvm_test_suite/bcc/O0/Bullet_20260426_223352",
+      "reasons": [
+        "low_active_pid_count"
+      ]
+    },
+    {
+      "program": "McCat_03-testtrie",
+      "variant": "O0",
+      "active_pid_count": 1,
+      "cycles_per_iter": 0.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/McCat_03-testtrie_20260426_231125",
+      "reasons": [
+        "low_active_pid_count",
+        "nonpositive_cycles_per_iter"
+      ]
+    },
+    {
+      "program": "McCat_05-eks",
+      "variant": "O0",
+      "active_pid_count": 1,
+      "cycles_per_iter": 0.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/McCat_05-eks_20260426_230559",
+      "reasons": [
+        "low_active_pid_count",
+        "nonpositive_cycles_per_iter"
+      ]
+    },
+    {
+      "program": "MiBench_consumer-jpeg",
+      "variant": "O0",
+      "active_pid_count": 1,
+      "cycles_per_iter": 0.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/MiBench_consumer-jpeg_20260426_232246",
+      "reasons": [
+        "low_active_pid_count",
+        "nonpositive_cycles_per_iter"
+      ]
+    },
+    {
+      "program": "MiBench_consumer-typeset",
+      "variant": "O0",
+      "active_pid_count": 1,
+      "cycles_per_iter": 0.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/MiBench_consumer-typeset_20260426_233251",
+      "reasons": [
+        "low_active_pid_count",
+        "nonpositive_cycles_per_iter"
+      ]
+    },
+    {
+      "program": "PAQ8p",
+      "variant": "O0",
+      "active_pid_count": 2,
+      "cycles_per_iter": 114816592508.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/PAQ8p_20260426_235423",
+      "reasons": [
+        "low_active_pid_count"
+      ]
+    },
+    {
+      "program": "Prolangs-C++_employ",
+      "variant": "O0",
+      "active_pid_count": 1,
+      "cycles_per_iter": 0.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/Prolangs-C++_employ_20260426_235914",
+      "reasons": [
+        "low_active_pid_count",
+        "nonpositive_cycles_per_iter"
+      ]
+    },
+    {
+      "program": "Prolangs-C++_simul",
+      "variant": "O0",
+      "active_pid_count": 1,
+      "cycles_per_iter": 0.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/Prolangs-C++_simul_20260426_235732",
+      "reasons": [
+        "low_active_pid_count",
+        "nonpositive_cycles_per_iter"
+      ]
+    },
+    {
+      "program": "Prolangs-C_agrep",
+      "variant": "O0",
+      "active_pid_count": 1,
+      "cycles_per_iter": 0.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/Prolangs-C_agrep_20260426_235527",
+      "reasons": [
+        "low_active_pid_count",
+        "nonpositive_cycles_per_iter"
+      ]
+    },
+    {
+      "program": "Prolangs-C_bison",
+      "variant": "O0",
+      "active_pid_count": 1,
+      "cycles_per_iter": 0.0,
+      "output_dir": "data/llvm_test_suite/bcc/O0/Prolangs-C_bison_20260426_234854",
+      "reasons": [
+        "low_active_pid_count",
+        "nonpositive_cycles_per_iter"
+      ]
+    }
+  ]
+}

@@ -199,11 +199,17 @@ def load_model(model_path: pathlib.Path, device: torch.device) -> PairTransforme
         feat_dim        = F,
         d_model         = hparams.get("d_model",         64),
         nhead           = hparams.get("nhead",             2),
-        num_layers      = hparams.get("nlayers",           3),
-        dim_feedforward = hparams.get("ffn_dim",         256),
+        num_layers      = hparams.get("nlayers", hparams.get("num_layers", 3)),
+        dim_feedforward = hparams.get("ffn_dim", hparams.get("dim_feedforward", 256)),
         dropout         = 0.0,  # 推理阶段关闭 dropout
     )
-    model.load_state_dict(data["model_state"])
+    missing, unexpected = model.load_state_dict(data["model_state"], strict=False)
+    allowed_missing = {k for k in missing if k.startswith("cls_head.")}
+    unexpected = list(unexpected)
+    if unexpected or (set(missing) - allowed_missing):
+        raise RuntimeError(
+            f"模型权重与当前结构不兼容: missing={list(missing)} unexpected={unexpected}"
+        )
     model.to(device)
     model.eval()
     return model
