@@ -20,7 +20,7 @@
 3. [03-experiment-design.md](03-experiment-design.md)：基于现有数据应做哪些实验，哪些暂时不该做。
 4. [04-model-plan.md](04-model-plan.md)：围绕现有 `run_features` / `pairs` / `anchor_set` 的模型路线。
 5. [05-implementation-roadmap.md](05-implementation-roadmap.md)：按现有脚本和产物重排里程碑与下一步任务。
-6. [06-collection-to-transformer-workflow.md](06-collection-to-transformer-workflow.md)：从采集数据到 PairTransformer 训练的具体执行流程与流程图。
+6. [06-collection-to-transformer-workflow.md](06-collection-to-transformer-workflow.md)：从采集数据到 PairTransformer 训练、单程序评分与可选评分层 fine tune 的具体执行流程与流程图。
 7. [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)：当前数据问题、最值得做的优化和优先级。
 
 ## 推荐阅读顺序

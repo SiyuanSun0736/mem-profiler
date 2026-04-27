@@ -9,10 +9,16 @@ flowchart TD
     G --> H
     H --> I[build_pair_table.py<br/>构造 pairs.parquet]
     H --> J[build_anchor_set.py<br/>构造 anchor_set.parquet]
+    H --> T[build_time_score_table.py<br/>构造 time_scores.parquet]
     I --> K[train_transformer.py<br/>PairTransformer 训练]
     K --> L[model_transformer.pt<br/>model_transformer_eval.json]
     J --> M[score_program.py<br/>单程序评分]
     K --> M
+    T --> N[tune_score_program_fine.py<br/>按 variant 精调评分参数]
+    J --> N
+    K --> N
+    N --> O[score_tune_fine_variant_best.json<br/>score_tune_fine_variant_trials.csv]
+    O --> M
 
     subgraph Raw Data Layer
         C
@@ -31,4 +37,10 @@ flowchart TD
         K
         L
         M
+        N
+        O
+    end
+
+    subgraph Validation Layer
+        T
     end

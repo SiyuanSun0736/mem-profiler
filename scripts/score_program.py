@@ -73,9 +73,11 @@ VARIANT_RANK = {"O0": 0, "O1": 1, "O2": 2, "O3": 3}
 CLASS_LABELS = ("i_better", "tie", "j_better")
 DEFAULT_TIE_GATE_THRESHOLD = 0.55
 DEFAULT_TIE_SHRINK_POWER = 1.0
+DEFAULT_TIE_MARGIN_WEIGHT_ALPHA = 0.30
 DEFAULT_MIN_ANCHOR_QUALITY = 0.30
 DEFAULT_OUTLIER_MAD_SCALE = 3.0
 DEFAULT_OUTLIER_MIN_DELTA = 0.35
+DEFAULT_TUNED_DEFAULTS_JSON = "train_set/score_tune_fine_variant_best.json"
 
 # ── 瓶颈归因特征分组 ───────────────────────────────────────────────────────────
 # 每组特征的 z-score 均值作为该类瓶颈的 severity（值越高压力越大）
@@ -207,6 +209,21 @@ def _variant_distance_weight(query_variant: str, anchor_variant: str) -> float:
     return max(0.55, 1.0 - 0.15 * distance)
 
 
+def _pair_vote_confidence(
+    class_probs: list[float],
+    decoded_class: str,
+    tie_margin_weight_alpha: float,
+) -> tuple[float, float, float]:
+    i_prob, tie_prob, j_prob = [float(p) for p in class_probs]
+    cls_conf = max(i_prob, tie_prob, j_prob)
+    direction_margin = abs(i_prob - j_prob)
+    alpha = float(np.clip(tie_margin_weight_alpha, 0.0, 1.0))
+    if decoded_class == "tie":
+        return cls_conf, cls_conf, direction_margin
+    effective_conf = (1.0 - alpha) * cls_conf + alpha * direction_margin
+    return effective_conf, cls_conf, direction_margin
+
+
 def _decode_pair_log_ratio(
     pred_log_ratio: float,
     cls_logits: torch.Tensor,
@@ -269,6 +286,73 @@ def _filter_anchor_estimates(
     return anchor_estimates
 
 
+def _load_tuned_variant_defaults(path: pathlib.Path) -> dict[str, dict[str, float]]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception as exc:
+        print(f"[warn] 读取 tuned defaults 失败: {path} ({exc})")
+        return {}
+
+    best_by_variant = data.get("best_by_variant")
+    if not isinstance(best_by_variant, dict):
+        return {}
+
+    param_keys = {
+        "tie_gate_threshold",
+        "tie_shrink_power",
+        "tie_margin_weight_alpha",
+        "min_anchor_quality",
+        "anchor_outlier_mad_scale",
+        "anchor_outlier_min_delta",
+    }
+    variant_defaults: dict[str, dict[str, float]] = {}
+    for variant, payload in best_by_variant.items():
+        if not isinstance(payload, dict):
+            continue
+        best = payload.get("best")
+        if not isinstance(best, dict):
+            continue
+        picked = {
+            key: float(best[key])
+            for key in param_keys
+            if key in best and best[key] is not None
+        }
+        if picked:
+            variant_defaults[str(variant)] = picked
+    return variant_defaults
+
+
+def _resolve_scoring_params(
+    query_variant: str,
+    cli_overrides: dict[str, float | None],
+    tuned_defaults: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    fallback_defaults = {
+        "tie_gate_threshold": DEFAULT_TIE_GATE_THRESHOLD,
+        "tie_shrink_power": DEFAULT_TIE_SHRINK_POWER,
+        "tie_margin_weight_alpha": DEFAULT_TIE_MARGIN_WEIGHT_ALPHA,
+        "min_anchor_quality": DEFAULT_MIN_ANCHOR_QUALITY,
+        "anchor_outlier_mad_scale": DEFAULT_OUTLIER_MAD_SCALE,
+        "anchor_outlier_min_delta": DEFAULT_OUTLIER_MIN_DELTA,
+    }
+    variant_defaults = tuned_defaults.get(query_variant, {})
+    shared_defaults = tuned_defaults.get("ALL", {})
+    resolved: dict[str, float] = {}
+    for key, fallback in fallback_defaults.items():
+        override = cli_overrides.get(key)
+        if override is not None:
+            resolved[key] = float(override)
+        elif key in variant_defaults:
+            resolved[key] = float(variant_defaults[key])
+        elif key in shared_defaults:
+            resolved[key] = float(shared_defaults[key])
+        else:
+            resolved[key] = float(fallback)
+    return resolved
+
+
 # ── 模型加载 ───────────────────────────────────────────────────────────────────
 
 def load_model(model_path: pathlib.Path, device: torch.device) -> PairTransformer:
@@ -311,6 +395,7 @@ def predict_score(
     device:        torch.device,
     tie_gate_threshold: float = DEFAULT_TIE_GATE_THRESHOLD,
     tie_shrink_power: float = DEFAULT_TIE_SHRINK_POWER,
+    tie_margin_weight_alpha: float = DEFAULT_TIE_MARGIN_WEIGHT_ALPHA,
     min_anchor_quality: float = DEFAULT_MIN_ANCHOR_QUALITY,
     outlier_mad_scale: float = DEFAULT_OUTLIER_MAD_SCALE,
     outlier_min_delta: float = DEFAULT_OUTLIER_MIN_DELTA,
@@ -339,8 +424,12 @@ def predict_score(
 
         anchor_quality = float(anc.get("anchor_quality", 1.0) or 0.0)
         distance_weight = _variant_distance_weight(query_variant, str(anc.get("variant", "")))
-        class_confidence = float(decoded["class_confidence"])
-        base_weight = anchor_quality * distance_weight * class_confidence
+        effective_confidence, class_confidence, direction_margin = _pair_vote_confidence(
+            list(decoded["class_probs"]),
+            str(decoded["decoded_class"]),
+            tie_margin_weight_alpha=tie_margin_weight_alpha,
+        )
+        base_weight = anchor_quality * distance_weight * effective_confidence
         if anchor_quality < min_anchor_quality:
             base_weight = 0.0
 
@@ -352,6 +441,8 @@ def predict_score(
             "anchor_quality":    round(anchor_quality, 4),
             "distance_weight":   round(distance_weight, 4),
             "class_confidence":  round(class_confidence, 4),
+            "effective_confidence": round(effective_confidence, 4),
+            "direction_margin":  round(direction_margin, 4),
             "tie_prob":          round(float(decoded["tie_prob"]), 4),
             "decoded_class":     str(decoded["decoded_class"]),
             "model_log_ratio":   round(pred_log_ratio, 4),
@@ -400,16 +491,20 @@ def main() -> None:
     parser.add_argument("--anchor-set", default="train_set/anchor_set.parquet")
     parser.add_argument("--zscore",     default="train_set/run_features_zscore.parquet")
     parser.add_argument("--output",     default="train_set/scores.parquet")
+    parser.add_argument("--tuned-defaults-json", default=DEFAULT_TUNED_DEFAULTS_JSON,
+                        help="按 variant 覆盖评分默认值的 tuned JSON；CLI 显式传参优先")
     parser.add_argument("--device",     default=None)
-    parser.add_argument("--tie-gate-threshold", type=float, default=DEFAULT_TIE_GATE_THRESHOLD,
+    parser.add_argument("--tie-gate-threshold", type=float, default=None,
                         help="辅助分类头判为 tie 时将回归输出压到 0 的阈值")
-    parser.add_argument("--tie-shrink-power", type=float, default=DEFAULT_TIE_SHRINK_POWER,
+    parser.add_argument("--tie-shrink-power", type=float, default=None,
                         help="按 (1 - p_tie)^power 缩放回归输出的幂次")
-    parser.add_argument("--min-anchor-quality", type=float, default=DEFAULT_MIN_ANCHOR_QUALITY,
+    parser.add_argument("--tie-margin-weight-alpha", type=float, default=None,
+                        help="对非 tie pair，将锚点投票权重从纯 class confidence 向 direction margin 混合的比例")
+    parser.add_argument("--min-anchor-quality", type=float, default=None,
                         help="低于该质量分数的锚点不参与聚合")
-    parser.add_argument("--anchor-outlier-mad-scale", type=float, default=DEFAULT_OUTLIER_MAD_SCALE,
+    parser.add_argument("--anchor-outlier-mad-scale", type=float, default=None,
                         help="按中位数绝对偏差过滤锚点估计时的倍率")
-    parser.add_argument("--anchor-outlier-min-delta", type=float, default=DEFAULT_OUTLIER_MIN_DELTA,
+    parser.add_argument("--anchor-outlier-min-delta", type=float, default=None,
                         help="锚点估计最小离群剔除阈值")
     parser.add_argument("--program",    default=None, help="只对指定程序打印诊断报告")
     parser.add_argument("--variant",    default=None, help="与 --program 配合使用")
@@ -419,6 +514,7 @@ def main() -> None:
     anchor_path = (REPO_ROOT / args.anchor_set).resolve()
     zscore_path = (REPO_ROOT / args.zscore).resolve()
     out_path    = (REPO_ROOT / args.output).resolve()
+    tuned_defaults_path = (REPO_ROOT / args.tuned_defaults_json).resolve()
 
     for p in (model_path, anchor_path, zscore_path):
         if not p.exists():
@@ -426,11 +522,23 @@ def main() -> None:
 
     device = select_device(args.device)
     model  = load_model(model_path, device)
+    tuned_defaults = _load_tuned_variant_defaults(tuned_defaults_path)
+    cli_overrides = {
+        "tie_gate_threshold": args.tie_gate_threshold,
+        "tie_shrink_power": args.tie_shrink_power,
+        "tie_margin_weight_alpha": args.tie_margin_weight_alpha,
+        "min_anchor_quality": args.min_anchor_quality,
+        "anchor_outlier_mad_scale": args.anchor_outlier_mad_scale,
+        "anchor_outlier_min_delta": args.anchor_outlier_min_delta,
+    }
 
     df_anchors = pd.read_parquet(anchor_path)
     df_queries = pd.read_parquet(zscore_path)
     if DROPPED_INPUT_FEATURES:
         print(f"[info] 已从评分输入中剔除死特征: {', '.join(DROPPED_INPUT_FEATURES)}")
+    if tuned_defaults:
+        available_variants = ", ".join(sorted(tuned_defaults.keys()))
+        print(f"[info] 已加载 variant 默认参数: {available_variants}")
 
     # 读取 anchor stats（用于 0-100 归一化）
     stats_path = anchor_path.with_suffix(".stats.json")
@@ -471,6 +579,12 @@ def main() -> None:
         if not anchors:
             anchors = anchor_map.get(prog, [])
 
+        scoring_params = _resolve_scoring_params(
+            query_variant=variant,
+            cli_overrides=cli_overrides,
+            tuned_defaults=tuned_defaults,
+        )
+
         # 推断分数
         result = predict_score(
             query_feat,
@@ -478,11 +592,12 @@ def main() -> None:
             anchors=anchors,
             model=model,
             device=device,
-            tie_gate_threshold=args.tie_gate_threshold,
-            tie_shrink_power=args.tie_shrink_power,
-            min_anchor_quality=args.min_anchor_quality,
-            outlier_mad_scale=args.anchor_outlier_mad_scale,
-            outlier_min_delta=args.anchor_outlier_min_delta,
+            tie_gate_threshold=scoring_params["tie_gate_threshold"],
+            tie_shrink_power=scoring_params["tie_shrink_power"],
+            tie_margin_weight_alpha=scoring_params["tie_margin_weight_alpha"],
+            min_anchor_quality=scoring_params["min_anchor_quality"],
+            outlier_mad_scale=scoring_params["anchor_outlier_mad_scale"],
+            outlier_min_delta=scoring_params["anchor_outlier_min_delta"],
         )
 
         score_log = result["score_log"]
@@ -591,17 +706,23 @@ def main() -> None:
         qrow = qrow_matches.iloc[0]
         query_feat  = {c: float(qrow.get(c, 0.0)) for c in NON_TIME_COLS}
         anchors     = [a for a in anchor_map.get(args.program, []) if a["variant"] != variant]
+        scoring_params = _resolve_scoring_params(
+            query_variant=variant,
+            cli_overrides=cli_overrides,
+            tuned_defaults=tuned_defaults,
+        )
         result      = predict_score(
             query_feat,
             query_variant=variant,
             anchors=anchors,
             model=model,
             device=device,
-            tie_gate_threshold=args.tie_gate_threshold,
-            tie_shrink_power=args.tie_shrink_power,
-            min_anchor_quality=args.min_anchor_quality,
-            outlier_mad_scale=args.anchor_outlier_mad_scale,
-            outlier_min_delta=args.anchor_outlier_min_delta,
+            tie_gate_threshold=scoring_params["tie_gate_threshold"],
+            tie_shrink_power=scoring_params["tie_shrink_power"],
+            tie_margin_weight_alpha=scoring_params["tie_margin_weight_alpha"],
+            min_anchor_quality=scoring_params["min_anchor_quality"],
+            outlier_mad_scale=scoring_params["anchor_outlier_mad_scale"],
+            outlier_min_delta=scoring_params["anchor_outlier_min_delta"],
         )
         score_log   = result["score_log"]
         score_100   = _percentile_score(score_log, all_scores)
@@ -611,6 +732,12 @@ def main() -> None:
         print(f"\n{'='*60}")
         print(f"  诊断卡片：{args.program}  /  {variant}")
         print(f"{'='*60}")
+        print(
+            "  实际评分参数      : "
+            f"gate={scoring_params['tie_gate_threshold']:.3f}  "
+            f"shrink={scoring_params['tie_shrink_power']:.3f}  "
+            f"alpha={scoring_params['tie_margin_weight_alpha']:.3f}"
+        )
         print(f"  优化分数 (log)  : {score_log:+.3f}")
         print(f"  优化分数 (0-100): {score_100:.1f}")
         print(f"  优化档位        : {band_label}")

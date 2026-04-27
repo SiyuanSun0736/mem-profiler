@@ -102,12 +102,15 @@
 
 ### P3. 对接近 tie 的 pair 做专门处理
 
-这一项本轮已经做了第二步实现，落点同时在 [scripts/train_transformer.py](../../scripts/train_transformer.py) 和 [scripts/score_program.py](../../scripts/score_program.py)：
+这一项现在已经推进到第三步，落点同时在 [scripts/train_transformer.py](../../scripts/train_transformer.py)、[scripts/score_program.py](../../scripts/score_program.py) 和 [scripts/tune_score_program_fine.py](../../scripts/tune_score_program_fine.py)：
 
 1. 对 `|log_ratio|` 做三档分桶：`tie`、`near_tie`、`far`。
 2. 对回归头引入 tie-aware weighting：默认 `tie=0.35`、`near_tie=0.65`、`far=1.0`。
 3. 将原来的“单头回归 + 可选方向 BCE”改成“回归头 + 3 类辅助头（i_better / tie / j_better）”。
 4. 在单程序评分阶段，不再直接使用回归头裸输出，而是让辅助分类头参与近 tie 解码和 gating：高 `p_tie` 的 pair 会被压缩到接近 0，非 tie pair 的方向也由辅助头参与约束。
+5. 在锚点聚合阶段，又新增了 `tie_margin_weight_alpha`：非 tie pair 的投票权重不再只看分类置信度，而是混入 direction margin，专门下调“近 tie 但仍被判成 directional”的 pair。
+6. 现在还新增了 [scripts/tune_score_program_fine.py](../../scripts/tune_score_program_fine.py)，可以在不重训模型的前提下缓存 query-anchor 预测，并按 query variant 分开精调 `gate / shrink / alpha`。
+7. [scripts/score_program.py](../../scripts/score_program.py) 现在会默认读取 [train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json)，按 `CLI 显式传参 > 当前 variant tuned best > ALL tuned best > 代码硬编码默认值` 的优先级生效。
 
 当前这版模型的结果在 [train_set/model_transformer_eval.json](../../train_set/model_transformer_eval.json)：
 
@@ -116,14 +119,22 @@
 3. `O2-O3` 上，回归主头 `acc_3cls = 0.450`，辅助分类头 `aux_acc_3cls = 0.600`。
 4. `O1-O2` / `O1-O3` 上，辅助分类头也继续高于回归主头。
 
-但这一步目前还不是“直接替换主模型”的终点，因为它带来了一个新的权衡：
+本轮完整 fine tune 后，当前 tuned defaults 在 [train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json)：
 
-1. 辅助分类头用于 gating 后，单程序评分已经明显回升，不再像第一版 P3 那样直接拖坏下游评分。
-2. 但 strict 时间外部验证在 [train_set/score_time_eval.json](../../train_set/score_time_eval.json) 中仍只有 `corr_model_time = 0.4310`，说明“近 tie 解码变稳”还没有完全等价于“更接近真实时间”。
+1. `ALL` 的最优组合是 `gate=0.50`、`shrink=0.75`、`alpha=0.50`。
+2. `O2` 的最优组合是 `gate=0.60`、`shrink=1.25`、`alpha=0.50`。
+3. `O3` 的最优组合是 `gate=0.55`、`shrink=1.25`、`alpha=0.50`。
+4. `O0` / `O1` 的局部最优目前并不可靠：`O0` 的相关性是 `NaN`，`O1` 的 `score_corr` 缺失且 `time_corr` 为负，因此这两组结果只能视为弱信号，不能和 `O2` / `O3` 同等看待。
+
+把这份 tuned JSON 回放到默认评分路径后，最新整体结果在 [train_set/score_eval.json](../../train_set/score_eval.json) 和 [train_set/score_time_eval.json](../../train_set/score_time_eval.json)：
+
+1. 单程序评分：`mae_score_log = 0.3204`，`corr_score_log = 0.8985`，`band_accuracy = 0.8075`。
+2. strict 时间外部验证：`mae_model_time = 0.9993`，`corr_model_time = 0.4337`，`spearman_model = 0.5192`，`band_acc_model = 0.6837`。
+3. 相比上一版统一默认值，proxy 口径略有回落，但真实时间口径继续小幅改善。
 
 所以当前更准确的判断不是“P3 已经完成”，而是：
 
-P3 的方向是对的，辅助分类头已经不仅在训练里学到了近 tie pair，也开始参与下游解码；但还需要继续调权重、阈值或推理解码，才能把这部分收益稳定迁移到真实时间口径。
+P3 的方向是对的，而且已经从“训练端 tie-aware + 下游 gating”推进到了“评分层按 variant 精调并回放默认值”。但它还没有完全收敛：`O2` / `O3` 的 tuned best 已经有稳定信号，`O0` / `O1` 的 tuned local optimum 仍然口径不足，下一步更合理的是给 [scripts/score_program.py](../../scripts/score_program.py) 再加一道可靠性回退，当某个 variant 的 tuned 指标为 `NaN` 或样本口径不足时自动回退到 `ALL`，而不是无条件采用 local best。
 
 ### P4. 改锚点策略，而不是只用 O0/O3 平均
 
@@ -151,6 +162,8 @@ P3 的方向是对的，辅助分类头已经不仅在训练里学到了近 tie 
 
 只用 O0/O3 平均确实过于脆弱；把 O2 拉进来，并且按质量和离群情况做加权，是比简单平均更稳的默认策略。
 
+后续即使继续做 P3 的 per-variant fine tune，P4 这层 O0/O2/O3 加权锚点仍然是当前单程序评分能够成立的底座；最新 replay 后的整体 `score_eval` 已经变成 `corr_score_log = 0.8985`、`mae_score_log = 0.3204`，但这一变化更主要来自 P3 评分层精调，而不是推翻了 P4 的锚点策略。
+
 ### P5. 清理死特征并引入样本质量权重
 
 这一项本轮已经做完第一步：
@@ -169,10 +182,10 @@ P3 的方向是对的，辅助分类头已经不仅在训练里学到了近 tie 
 建议的执行顺序如下：
 
 1. 先保留并稳定语义过滤。
-2. 再重建 run_features / pairs / anchor_set / model / scores 全链路。
-3. 然后补时间真值与 score_time 外部验证。
-4. 再对 O2-O3 这类近邻 pair 做 tie-aware 训练改造。
-5. 最后再考虑锚点策略和特征裁剪。
+2. 保持 `run_features / pairs / anchor_set / model / scores / score_time_eval` 这条重建链路可重复。
+3. 给 [scripts/score_program.py](../../scripts/score_program.py) 增加 tuned-default fallback：当某个 variant tuned 指标是 `NaN` 或样本口径不足时，自动回退到 `ALL`。
+4. 继续只在 `O2` / `O3` 这类真正有信号的近邻 variant 上细扫 P3 参数，而不是把 `O0` / `O1` 的局部最优当真。
+5. 然后再补更强的 fixed-work repeat timing 与 wall-time 真值，把 `score_time` 口径继续做实。
 
 ## 5. 当前判断
 

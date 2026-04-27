@@ -17,6 +17,7 @@ Mermaid 源文件在 [assets/collection-to-transformer-workflow.mmd](assets/coll
 5. 在程序内构造 O0/O1/O2/O3 pair，并生成锚点集。
 6. 用 PairTransformer 把两个运行摘要编码成双 token 序列，训练成对回归模型。
 7. 训练完成后，再结合锚点集做单程序评分。
+8. 如有需要，再在评分层做一次不重训模型的 fine tune，并把 per-variant 默认值回放到评分路径。
 
 ## 2. 入口与产物对应关系
 
@@ -29,6 +30,8 @@ Mermaid 源文件在 [assets/collection-to-transformer-workflow.mmd](assets/coll
 | pair 构建 | [scripts/build_pair_table.py](../../scripts/build_pair_table.py) | `run_features.parquet`、`run_features_zscore.parquet` | `train_set/pairs.parquet` |
 | 锚点构建 | [scripts/build_anchor_set.py](../../scripts/build_anchor_set.py) | `run_features.parquet`、`run_features_zscore.parquet` | `train_set/anchor_set.parquet` |
 | Transformer 训练 | [scripts/train_transformer.py](../../scripts/train_transformer.py) | `train_set/pairs.parquet` | `train_set/model_transformer.pt`、`model_transformer_eval.json` |
+| 单程序评分 | [scripts/score_program.py](../../scripts/score_program.py) | `train_set/model_transformer.pt`、`train_set/anchor_set.parquet`、`train_set/run_features_zscore.parquet` | `train_set/scores.parquet`、`score_eval.json` |
+| 评分层 fine tune（可选） | [scripts/tune_score_program_fine.py](../../scripts/tune_score_program_fine.py) | `model_transformer.pt`、`anchor_set.parquet`、`run_features_zscore.parquet`、`time_scores.parquet` | `score_tune_fine_variant_trials.csv`、`score_tune_fine_variant_best.json` |
 
 ## 3. 端到端执行顺序
 
@@ -227,6 +230,7 @@ train_set/anchor_set.parquet
 1. `train_set/model_transformer.pt`
 2. `train_set/anchor_set.parquet`
 3. `train_set/run_features_zscore.parquet`
+4. `train_set/score_tune_fine_variant_best.json`（如果存在，则按 variant 覆盖默认评分参数）
 
 执行命令如下：
 
@@ -246,9 +250,32 @@ train_set/anchor_set.parquet
 这一步的逻辑不是“直接回归单程序分数”，而是：
 
 1. 取 query run 的 z-score 特征。
-2. 取同一 program 的 anchor runs（通常是 O0、O3）。
+2. 取同一 program 的 anchor runs（当前默认通常是 O0、O2、O3）。
 3. 用训练好的 PairTransformer 预测 `model(query, anchor)`。
 4. 把预测的 pairwise log-ratio 加到锚点真值 `score_gt` 上，得到单程序分数估计。
+
+[scripts/score_program.py](../../scripts/score_program.py) 现在还会在默认路径下自动读取 [train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json)。默认优先级是：`CLI 显式传参 > 当前 variant tuned best > ALL tuned best > 代码硬编码默认值`。
+
+### Step 8.5 可选：只调评分层，不重训模型
+
+如果模型已经训练完成，但你还想继续优化单程序评分和时间外部验证，可以只对评分层做 fine tune：
+
+```bash
+.venv/bin/python scripts/tune_score_program_fine.py --device cpu
+```
+
+这一步会：
+
+1. 先缓存 query-anchor 的原始 pair 预测。
+2. 再对 `tie_gate_threshold / tie_shrink_power / tie_margin_weight_alpha` 做细粒度搜索。
+3. 按 query variant 分开输出最优组合到 `train_set/score_tune_fine_variant_best.json`。
+
+调参完成后，再次执行 [scripts/score_program.py](../../scripts/score_program.py) 即可自动回放这份 per-variant 默认值：
+
+```bash
+.venv/bin/python scripts/score_program.py --device cpu
+.venv/bin/python scripts/evaluate_score_vs_time.py
+```
 
 ## 4. Transformer Encoder 在这条链路里的位置
 
@@ -257,7 +284,7 @@ train_set/anchor_set.parquet
 PairTransformer 不是直接读取 JSONL，而是读取 `pairs.parquet` 中每条 pair 的运行级 z-score 特征：
 
 $$
-(x_i, x_j),\quad x_i, x_j \in \mathbb{R}^{54}
+(x_i, x_j),\quad x_i, x_j \in \mathbb{R}^{53}
 $$
 
 其中：
@@ -322,6 +349,13 @@ sudo bash experiments/llvm_test_suite/collect_dataset_all_variants.sh -v "O0 O1 
 
 # 6) 用训练后的模型做单程序评分
 .venv/bin/python scripts/score_program.py --device cpu
+
+# 7) 可选：只微调评分层参数，并按 variant 刷新默认值
+.venv/bin/python scripts/tune_score_program_fine.py --device cpu
+
+# 8) 可选：把新的 per-variant 默认值重放到评分路径，并重新做时间外部验证
+.venv/bin/python scripts/score_program.py --device cpu
+.venv/bin/python scripts/evaluate_score_vs_time.py
 ```
 
 ## 6. 如何重新生成流程图 PNG
