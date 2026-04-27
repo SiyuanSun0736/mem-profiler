@@ -34,60 +34,11 @@ import sys
 import numpy as np
 import pandas as pd
 
+from feature_columns import NON_TIME_COLS
+
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 TIE_THRESHOLD = 0.05
-
-# ── 特征列（与 build_pair_table.py / train_transformer.py 保持一致）────────────────────────────────
-NON_TIME_COLS: list[str] = [
-    # 效率指标
-    "ipc", "cpi",
-    # LLC
-    "llc_load_miss_rate", "llc_store_miss_rate",
-    "llc_mpki", "llc_store_mpki",
-    # dTLB
-    "dtlb_miss_rate", "dtlb_mpki",
-    # iTLB
-    "itlb_mpki",
-    # page fault
-    "fault_per_ki", "fault_per_ms",
-    "minor_fault_ratio",
-    # 采样密度
-    "samples_per_ms",
-    # 窗口分布 — IPC
-    "win_ipc_mean", "win_ipc_std", "win_ipc_p95", "win_ipc_peak_share", "win_ipc_min",
-    # 窗口分布 — LLC MPKI
-    "win_llc_mpki_mean", "win_llc_mpki_std", "win_llc_mpki_p95",
-    "win_llc_mpki_peak_share", "win_llc_mpki_min",
-    # 窗口分布 — dTLB MPKI
-    "win_dtlb_mpki_mean", "win_dtlb_mpki_std", "win_dtlb_mpki_p95",
-    "win_dtlb_mpki_peak_share", "win_dtlb_mpki_min",
-    # 窗口分布 — iTLB MPKI
-    "win_itlb_mpki_mean", "win_itlb_mpki_std", "win_itlb_mpki_p95",
-    "win_itlb_mpki_peak_share", "win_itlb_mpki_min",
-    # 窗口分布 — page fault
-    "win_fault_mean", "win_fault_std", "win_fault_p95",
-    "win_fault_peak_share", "win_fault_min",
-    # Fault 子类型比例（bounded [0,1]）
-    "anon_fault_ratio",
-    "file_fault_ratio",
-    "write_fault_ratio",
-    "instruction_fault_ratio",
-    # MM syscall 密度
-    "mmap_per_ms",
-    "munmap_per_ms",
-    "brk_per_ms",
-    "mm_syscall_per_ms",
-    "mmap_bytes_per_ms",
-    # 阶段特征（warmup / steady-state）
-    "warmup_ipc",
-    "steady_ipc",
-    "phase_ipc_ratio",
-    "warmup_llc_mpki",
-    "steady_llc_mpki",
-    "phase_llc_ratio",
-    "phase_fault_ratio",
-]
 
 
 def feat_cols() -> list[str]:

@@ -1,8 +1,8 @@
 {
   "n_pairs": 1494,
   "n_programs": 129,
-  "feature_dim": 54,
-  "input_dim": 162,
+  "feature_dim": 53,
+  "input_dim": 159,
   "tie_threshold": 0.05,
   "label_counts": {
     "j_better": 643,

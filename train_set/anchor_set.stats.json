@@ -2,14 +2,23 @@
   "baseline_variant": "O0",
   "anchor_variants": [
     "O0",
+    "O2",
     "O3"
   ],
   "n_programs": 128,
-  "n_anchors": 250,
+  "n_anchors": 374,
+  "anchors_by_variant": {
+    "O0": 128,
+    "O2": 124,
+    "O3": 122
+  },
+  "anchor_quality_mean": 0.5043,
+  "anchor_quality_min": 0.016,
+  "anchor_quality_max": 0.9985,
   "score_min": -2.0936,
-  "score_max": 7.6103,
+  "score_max": 9.2968,
   "score_p5": 0.0,
-  "score_p95": 4.1035,
-  "score_mean": 1.036,
-  "score_std": 1.4968
+  "score_p95": 4.5346,
+  "score_mean": 1.4051,
+  "score_std": 1.6152
 }

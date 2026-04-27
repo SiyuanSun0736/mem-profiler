@@ -62,12 +62,20 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _SCRIPTS  = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS))
 from train_transformer import (  # noqa: E402
+    DROPPED_INPUT_FEATURES,
     NON_TIME_COLS,
     PairTransformer,
     select_device,
 )
 
 F = len(NON_TIME_COLS)
+VARIANT_RANK = {"O0": 0, "O1": 1, "O2": 2, "O3": 3}
+CLASS_LABELS = ("i_better", "tie", "j_better")
+DEFAULT_TIE_GATE_THRESHOLD = 0.55
+DEFAULT_TIE_SHRINK_POWER = 1.0
+DEFAULT_MIN_ANCHOR_QUALITY = 0.30
+DEFAULT_OUTLIER_MAD_SCALE = 3.0
+DEFAULT_OUTLIER_MIN_DELTA = 0.35
 
 # ── 瓶颈归因特征分组 ───────────────────────────────────────────────────────────
 # 每组特征的 z-score 均值作为该类瓶颈的 severity（值越高压力越大）
@@ -190,6 +198,77 @@ def _band(pct: float) -> str:
     return "poor"
 
 
+def _variant_distance_weight(query_variant: str, anchor_variant: str) -> float:
+    q_rank = VARIANT_RANK.get(query_variant)
+    a_rank = VARIANT_RANK.get(anchor_variant)
+    if q_rank is None or a_rank is None:
+        return 1.0
+    distance = abs(q_rank - a_rank)
+    return max(0.55, 1.0 - 0.15 * distance)
+
+
+def _decode_pair_log_ratio(
+    pred_log_ratio: float,
+    cls_logits: torch.Tensor,
+    tie_gate_threshold: float,
+    tie_shrink_power: float,
+) -> dict[str, float | str | list[float]]:
+    probs = torch.softmax(cls_logits, dim=-1).detach().cpu().numpy().reshape(-1)
+    cls_idx = int(np.argmax(probs))
+    decoded_class = CLASS_LABELS[cls_idx]
+    tie_prob = float(probs[1])
+    cls_conf = float(probs[cls_idx])
+    gated_scale = max(0.0, 1.0 - tie_prob) ** tie_shrink_power
+    gated_log_ratio = float(pred_log_ratio) * gated_scale
+
+    if decoded_class == "tie" and tie_prob >= tie_gate_threshold:
+        gated_log_ratio = 0.0
+    elif decoded_class == "i_better":
+        gated_log_ratio = abs(gated_log_ratio)
+    elif decoded_class == "j_better":
+        gated_log_ratio = -abs(gated_log_ratio)
+
+    return {
+        "decoded_class": decoded_class,
+        "tie_prob": round(tie_prob, 6),
+        "class_confidence": round(cls_conf, 6),
+        "gated_scale": round(gated_scale, 6),
+        "raw_log_ratio": round(float(pred_log_ratio), 6),
+        "gated_log_ratio": round(float(gated_log_ratio), 6),
+        "class_probs": [round(float(p), 6) for p in probs.tolist()],
+    }
+
+
+def _filter_anchor_estimates(
+    anchor_estimates: list[dict[str, Any]],
+    mad_scale: float,
+    min_delta: float,
+) -> list[dict[str, Any]]:
+    if len(anchor_estimates) < 3:
+        for item in anchor_estimates:
+            item["used"] = item["weight"] > 0.0
+            item["outlier_delta"] = 0.0
+        return anchor_estimates
+
+    scores = np.array([float(item["score_estimate_raw"]) for item in anchor_estimates], dtype=np.float64)
+    median = float(np.median(scores))
+    mad = float(np.median(np.abs(scores - median)))
+    tol = max(float(min_delta), float(mad_scale) * mad)
+
+    kept = 0
+    for item in anchor_estimates:
+        delta = abs(float(item["score_estimate_raw"]) - median)
+        item["outlier_delta"] = round(delta, 6)
+        item["used"] = (delta <= tol) and (float(item["weight"]) > 0.0)
+        kept += int(item["used"])
+
+    if kept == 0:
+        for item in anchor_estimates:
+            item["used"] = float(item["weight"]) > 0.0
+
+    return anchor_estimates
+
+
 # ── 模型加载 ───────────────────────────────────────────────────────────────────
 
 def load_model(model_path: pathlib.Path, device: torch.device) -> PairTransformer:
@@ -226,9 +305,15 @@ def _to_tensor(feat_dict: dict[str, float], device: torch.device) -> torch.Tenso
 @torch.no_grad()
 def predict_score(
     query_feat:    dict[str, float],
+    query_variant: str,
     anchors:       list[dict[str, Any]],   # anchor records with score_gt + features
     model:         PairTransformer,
     device:        torch.device,
+    tie_gate_threshold: float = DEFAULT_TIE_GATE_THRESHOLD,
+    tie_shrink_power: float = DEFAULT_TIE_SHRINK_POWER,
+    min_anchor_quality: float = DEFAULT_MIN_ANCHOR_QUALITY,
+    outlier_mad_scale: float = DEFAULT_OUTLIER_MAD_SCALE,
+    outlier_min_delta: float = DEFAULT_OUTLIER_MIN_DELTA,
 ) -> dict[str, Any]:
     """
     利用参考锚点法估算单程序优化分数。
@@ -243,25 +328,64 @@ def predict_score(
     anchor_estimates = []
     for anc in anchors:
         xj = _to_tensor({c: float(anc.get(c, 0.0)) for c in NON_TIME_COLS}, device)
-        # model(xi=query, xj=anchor) = log(cycles_anchor / cycles_query)
-        pred_log_ratio = float(model(xi, xj).cpu().item())
-        # S_query = S_anchor + log(cycles_anchor / cycles_query)
-        s_est = float(anc["score_gt"]) + pred_log_ratio
+        pred_log_ratio, cls_logits = model.forward_with_aux(xi, xj)
+        pred_log_ratio = float(pred_log_ratio.cpu().item())
+        decoded = _decode_pair_log_ratio(
+            pred_log_ratio,
+            cls_logits,
+            tie_gate_threshold=tie_gate_threshold,
+            tie_shrink_power=tie_shrink_power,
+        )
+
+        anchor_quality = float(anc.get("anchor_quality", 1.0) or 0.0)
+        distance_weight = _variant_distance_weight(query_variant, str(anc.get("variant", "")))
+        class_confidence = float(decoded["class_confidence"])
+        base_weight = anchor_quality * distance_weight * class_confidence
+        if anchor_quality < min_anchor_quality:
+            base_weight = 0.0
+
+        gated_log_ratio = float(decoded["gated_log_ratio"])
+        s_est = float(anc["score_gt"]) + gated_log_ratio
         anchor_estimates.append({
             "anchor_variant":    anc["variant"],
             "anchor_score_gt":   round(float(anc["score_gt"]), 4),
+            "anchor_quality":    round(anchor_quality, 4),
+            "distance_weight":   round(distance_weight, 4),
+            "class_confidence":  round(class_confidence, 4),
+            "tie_prob":          round(float(decoded["tie_prob"]), 4),
+            "decoded_class":     str(decoded["decoded_class"]),
             "model_log_ratio":   round(pred_log_ratio, 4),
+            "gated_log_ratio":   round(gated_log_ratio, 4),
+            "score_estimate_raw": round(s_est, 6),
             "score_estimate":    round(s_est, 4),
+            "weight":            round(base_weight, 6),
+            "used":              base_weight > 0.0,
         })
 
     if not anchor_estimates:
         return {"score_log": 0.0, "score_100": 50.0, "band": "medium",
                 "anchor_details": []}
 
-    final_score = float(np.mean([e["score_estimate"] for e in anchor_estimates]))
+    anchor_estimates = _filter_anchor_estimates(
+        anchor_estimates,
+        mad_scale=outlier_mad_scale,
+        min_delta=outlier_min_delta,
+    )
+    kept = [e for e in anchor_estimates if e.get("used")]
+    if not kept:
+        kept = anchor_estimates
+
+    weights = np.array([float(e["weight"]) for e in kept], dtype=np.float64)
+    estimates = np.array([float(e["score_estimate_raw"]) for e in kept], dtype=np.float64)
+    if not np.isfinite(weights).all() or float(weights.sum()) <= 1e-12:
+        final_score = float(estimates.mean())
+    else:
+        final_score = float(np.average(estimates, weights=weights))
+
     return {
         "score_log":     round(final_score, 4),
         "anchor_details": anchor_estimates,
+        "n_anchors_used": len(kept),
     }
 
 
@@ -277,6 +401,16 @@ def main() -> None:
     parser.add_argument("--zscore",     default="train_set/run_features_zscore.parquet")
     parser.add_argument("--output",     default="train_set/scores.parquet")
     parser.add_argument("--device",     default=None)
+    parser.add_argument("--tie-gate-threshold", type=float, default=DEFAULT_TIE_GATE_THRESHOLD,
+                        help="辅助分类头判为 tie 时将回归输出压到 0 的阈值")
+    parser.add_argument("--tie-shrink-power", type=float, default=DEFAULT_TIE_SHRINK_POWER,
+                        help="按 (1 - p_tie)^power 缩放回归输出的幂次")
+    parser.add_argument("--min-anchor-quality", type=float, default=DEFAULT_MIN_ANCHOR_QUALITY,
+                        help="低于该质量分数的锚点不参与聚合")
+    parser.add_argument("--anchor-outlier-mad-scale", type=float, default=DEFAULT_OUTLIER_MAD_SCALE,
+                        help="按中位数绝对偏差过滤锚点估计时的倍率")
+    parser.add_argument("--anchor-outlier-min-delta", type=float, default=DEFAULT_OUTLIER_MIN_DELTA,
+                        help="锚点估计最小离群剔除阈值")
     parser.add_argument("--program",    default=None, help="只对指定程序打印诊断报告")
     parser.add_argument("--variant",    default=None, help="与 --program 配合使用")
     args = parser.parse_args()
@@ -295,6 +429,8 @@ def main() -> None:
 
     df_anchors = pd.read_parquet(anchor_path)
     df_queries = pd.read_parquet(zscore_path)
+    if DROPPED_INPUT_FEATURES:
+        print(f"[info] 已从评分输入中剔除死特征: {', '.join(DROPPED_INPUT_FEATURES)}")
 
     # 读取 anchor stats（用于 0-100 归一化）
     stats_path = anchor_path.with_suffix(".stats.json")
@@ -336,7 +472,18 @@ def main() -> None:
             anchors = anchor_map.get(prog, [])
 
         # 推断分数
-        result = predict_score(query_feat, anchors, model, device)
+        result = predict_score(
+            query_feat,
+            query_variant=variant,
+            anchors=anchors,
+            model=model,
+            device=device,
+            tie_gate_threshold=args.tie_gate_threshold,
+            tie_shrink_power=args.tie_shrink_power,
+            min_anchor_quality=args.min_anchor_quality,
+            outlier_mad_scale=args.anchor_outlier_mad_scale,
+            outlier_min_delta=args.anchor_outlier_min_delta,
+        )
 
         score_log = result["score_log"]
         score_100 = _percentile_score(score_log, all_scores)
@@ -352,6 +499,7 @@ def main() -> None:
             "score_100":   round(score_100, 1),
             "band":        band,
             "n_anchors":   len(anchors),
+            "n_anchors_used": int(result.get("n_anchors_used", len(anchors))),
             # 真值（用于评估）
             "score_gt":    float(
                 df_anchors.loc[
@@ -443,7 +591,18 @@ def main() -> None:
         qrow = qrow_matches.iloc[0]
         query_feat  = {c: float(qrow.get(c, 0.0)) for c in NON_TIME_COLS}
         anchors     = [a for a in anchor_map.get(args.program, []) if a["variant"] != variant]
-        result      = predict_score(query_feat, anchors, model, device)
+        result      = predict_score(
+            query_feat,
+            query_variant=variant,
+            anchors=anchors,
+            model=model,
+            device=device,
+            tie_gate_threshold=args.tie_gate_threshold,
+            tie_shrink_power=args.tie_shrink_power,
+            min_anchor_quality=args.min_anchor_quality,
+            outlier_mad_scale=args.anchor_outlier_mad_scale,
+            outlier_min_delta=args.anchor_outlier_min_delta,
+        )
         score_log   = result["score_log"]
         score_100   = _percentile_score(score_log, all_scores)
         band_label  = _band(score_100)
@@ -455,11 +614,14 @@ def main() -> None:
         print(f"  优化分数 (log)  : {score_log:+.3f}")
         print(f"  优化分数 (0-100): {score_100:.1f}")
         print(f"  优化档位        : {band_label}")
+        print(f"  使用锚点数      : {result.get('n_anchors_used', len(anchors))} / {len(anchors)}")
         print(f"\n  锚点比较明细：")
         for anc in result["anchor_details"]:
-            print(f"    vs {anc['anchor_variant']:3s}  "
-                  f"model_pred={anc['model_log_ratio']:+.4f}  "
-                  f"anchor_S={anc['anchor_score_gt']:+.4f}  "
+            used_mark = "*" if anc.get("used") else "x"
+            print(f"    [{used_mark}] vs {anc['anchor_variant']:3s}  "
+                  f"raw={anc['model_log_ratio']:+.4f}  gated={anc['gated_log_ratio']:+.4f}  "
+                  f"cls={anc['decoded_class']:8s}  p_tie={anc['tie_prob']:.3f}  "
+                  f"w={anc['weight']:.3f}  anchor_S={anc['anchor_score_gt']:+.4f}  "
                   f"→ score_est={anc['score_estimate']:+.4f}")
         print(f"\n  瓶颈归因（Top 3）：")
         for bt in bottlenecks[:3]:

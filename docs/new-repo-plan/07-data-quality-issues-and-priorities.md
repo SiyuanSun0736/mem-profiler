@@ -63,7 +63,7 @@
 
 ### 2.5 仍然存在死特征或弱特征
 
-本轮特征构建仍然报告零方差列 `minor_fault_ratio`，说明至少部分特征对当前数据没有贡献。它不会阻塞训练，但会增加噪声和解释成本。
+本轮特征构建仍然报告零方差列 `minor_fault_ratio`。这一列现在仍保留在 [train_set/run_features.parquet](../../train_set/run_features.parquet) 和 [train_set/run_features_zscore.parquet](../../train_set/run_features_zscore.parquet) 中用于账本和兼容性，但已经从 pair / anchor / model / score 的实际输入列里剔除，不再参与训练和推理。
 
 ## 3. 最值得做的优化
 
@@ -102,42 +102,67 @@
 
 ### P3. 对接近 tie 的 pair 做专门处理
 
-这一项本轮已经做了首版实现，落点在 [scripts/train_transformer.py](../../scripts/train_transformer.py)：
+这一项本轮已经做了第二步实现，落点同时在 [scripts/train_transformer.py](../../scripts/train_transformer.py) 和 [scripts/score_program.py](../../scripts/score_program.py)：
 
 1. 对 `|log_ratio|` 做三档分桶：`tie`、`near_tie`、`far`。
 2. 对回归头引入 tie-aware weighting：默认 `tie=0.35`、`near_tie=0.65`、`far=1.0`。
 3. 将原来的“单头回归 + 可选方向 BCE”改成“回归头 + 3 类辅助头（i_better / tie / j_better）”。
+4. 在单程序评分阶段，不再直接使用回归头裸输出，而是让辅助分类头参与近 tie 解码和 gating：高 `p_tie` 的 pair 会被压缩到接近 0，非 tie pair 的方向也由辅助头参与约束。
 
 当前这版模型的结果在 [train_set/model_transformer_eval.json](../../train_set/model_transformer_eval.json)：
 
-1. test 集回归主头：`dir_acc = 0.8971`，`acc_3cls = 0.7667`。
-2. test 集辅助分类头：`aux_acc_3cls = 0.8500`，`aux_tie_recall = 0.7222`。
-3. `O2-O3` 上，回归主头 `acc_3cls = 0.400`，辅助分类头 `aux_acc_3cls = 0.600`。
-4. `O1-O2` / `O1-O3` 上，辅助分类头也明显高于回归主头。
+1. test 集回归主头：`dir_acc = 0.8775`，`acc_3cls = 0.7833`。
+2. test 集辅助分类头：`aux_acc_3cls = 0.8292`，`aux_tie_recall = 0.5833`。
+3. `O2-O3` 上，回归主头 `acc_3cls = 0.450`，辅助分类头 `aux_acc_3cls = 0.600`。
+4. `O1-O2` / `O1-O3` 上，辅助分类头也继续高于回归主头。
 
 但这一步目前还不是“直接替换主模型”的终点，因为它带来了一个新的权衡：
 
-1. 单程序评分在 [train_set/score_eval.json](../../train_set/score_eval.json) 中变成 `corr_score_log = 0.8387`，低于只做 P1/P2 时的 0.9160。
-2. strict 时间外部验证在 [train_set/score_time_eval.json](../../train_set/score_time_eval.json) 中变成 `corr_model_time = 0.4695`，也低于之前的 0.5312。
+1. 辅助分类头用于 gating 后，单程序评分已经明显回升，不再像第一版 P3 那样直接拖坏下游评分。
+2. 但 strict 时间外部验证在 [train_set/score_time_eval.json](../../train_set/score_time_eval.json) 中仍只有 `corr_model_time = 0.4310`，说明“近 tie 解码变稳”还没有完全等价于“更接近真实时间”。
 
 所以当前更准确的判断不是“P3 已经完成”，而是：
 
-P3 的方向是对的，辅助分类头确实学到了近 tie pair；但还需要继续调权重、阈值或推理解码，才能在不伤害单程序评分的前提下把这部分收益吃下来。
+P3 的方向是对的，辅助分类头已经不仅在训练里学到了近 tie pair，也开始参与下游解码；但还需要继续调权重、阈值或推理解码，才能把这部分收益稳定迁移到真实时间口径。
 
 ### P4. 改锚点策略，而不是只用 O0/O3 平均
 
-当前单程序评分仍然过于依赖 O0/O3 两个锚点。更稳的做法是：
+这一项本轮已经做了首版实现，落点在 [scripts/build_anchor_set.py](../../scripts/build_anchor_set.py) 和 [scripts/score_program.py](../../scripts/score_program.py)：
 
-1. 加入 O2 作为中间锚点。
-2. 按锚点质量加权，而不是简单平均。
-3. 低质量锚点或离群锚点直接不参与评分。
+1. 默认锚点从 `O0/O3` 改成 `O0/O2/O3`。
+2. 在 anchor set 中加入 `active_window_ratio` 和 `anchor_quality`，用于质量加权。
+3. 单程序评分从简单平均改成“质量权重 × variant 距离权重 × 分类置信度”的加权聚合。
+4. 对同一程序的多个 anchor estimate 做中位数离群过滤，明显偏离的 anchor 不参与最终聚合。
+
+当前锚点统计在 [train_set/anchor_set.stats.json](../../train_set/anchor_set.stats.json)：
+
+1. 锚点总数从 250 增加到 374。
+2. 当前锚点集合为 O0=128、O2=124、O3=122。
+3. `anchor_quality_mean = 0.5043`。
+
+这一步带来的直接结果在 [train_set/score_eval.json](../../train_set/score_eval.json)：
+
+1. `n_with_gt = 374`，覆盖面明显高于只用 O0/O3 时的 250。
+2. `mae_score_log = 0.3165`。
+3. `corr_score_log = 0.8999`。
+4. `band_accuracy = 0.8075`。
+
+所以 P4 的判断已经可以更明确一些：
+
+只用 O0/O3 平均确实过于脆弱；把 O2 拉进来，并且按质量和离群情况做加权，是比简单平均更稳的默认策略。
 
 ### P5. 清理死特征并引入样本质量权重
 
-这一项优先级低于前面几条，但值得做：
+这一项本轮已经做完第一步：
 
-1. 从输入里剔除零方差或长期无信号特征。
-2. 把 `active_pid_count`、`window_count` 等更合理地作为样本质量信号，而不是直接忽略。
+1. 新增 [scripts/feature_columns.py](../../scripts/feature_columns.py) 作为共享输入特征列表。
+2. `minor_fault_ratio` 由于在当前快照里 `std = 0`，已经从 pair / anchor / model / score 的输入列里统一剔除。
+3. [train_set/pairs_stats.json](../../train_set/pairs_stats.json) 现在显示 `feature_dim = 53`、`input_dim = 159`，说明输入维度已经同步收缩。
+
+这一项还没有做完的部分是：
+
+1. 更系统地识别“长期弱信号特征”，而不只处理当前已知的零方差列。
+2. 把 `active_pid_count`、`active_window_ratio`、`window_count` 这类质量信号更完整地接入训练采样权重，而不只用于时间真值过滤和锚点质量加权。
 
 ## 4. 当前优先级顺序
 

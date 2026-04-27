@@ -40,32 +40,9 @@ import sys
 import numpy as np
 import pandas as pd
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+from feature_columns import DROPPED_INPUT_FEATURES, NON_TIME_COLS
 
-# 同步自 build_pair_table.py / train_transformer.py
-NON_TIME_COLS: list[str] = [
-    "ipc", "cpi",
-    "llc_load_miss_rate", "llc_store_miss_rate",
-    "llc_mpki", "llc_store_mpki",
-    "dtlb_miss_rate", "dtlb_mpki",
-    "itlb_mpki",
-    "fault_per_ki", "fault_per_ms",
-    "minor_fault_ratio",
-    "samples_per_ms",
-    "win_ipc_mean", "win_ipc_std", "win_ipc_p95", "win_ipc_peak_share", "win_ipc_min",
-    "win_llc_mpki_mean", "win_llc_mpki_std", "win_llc_mpki_p95",
-    "win_llc_mpki_peak_share", "win_llc_mpki_min",
-    "win_dtlb_mpki_mean", "win_dtlb_mpki_std", "win_dtlb_mpki_p95",
-    "win_dtlb_mpki_peak_share", "win_dtlb_mpki_min",
-    "win_itlb_mpki_mean", "win_itlb_mpki_std", "win_itlb_mpki_p95",
-    "win_itlb_mpki_peak_share", "win_itlb_mpki_min",
-    "win_fault_mean", "win_fault_std", "win_fault_p95",
-    "win_fault_peak_share", "win_fault_min",
-    "anon_fault_ratio", "file_fault_ratio", "write_fault_ratio", "instruction_fault_ratio",
-    "mmap_per_ms", "munmap_per_ms", "brk_per_ms", "mm_syscall_per_ms", "mmap_bytes_per_ms",
-    "warmup_ipc", "steady_ipc", "phase_ipc_ratio",
-    "warmup_llc_mpki", "steady_llc_mpki", "phase_llc_ratio", "phase_fault_ratio",
-]
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # 分数区间 → 档位
 BAND_THRESHOLDS = [
@@ -74,6 +51,24 @@ BAND_THRESHOLDS = [
     (0.25, "medium"),
     (0.00, "poor"),
 ]
+
+
+def _safe_div(numer: float, denom: float) -> float:
+    if denom <= 0:
+        return 0.0
+    return float(numer / denom)
+
+
+def _anchor_quality_from_row(row_raw: pd.Series) -> tuple[float, float]:
+    active_pid_count = int(row_raw.get("active_pid_count", 0) or 0)
+    active_window_count = float(row_raw.get("active_window_count", 0) or 0.0)
+    window_count = float(row_raw.get("window_count", 0) or 0.0)
+    active_window_ratio = _safe_div(active_window_count, window_count)
+
+    pid_score = min(1.0, math.log1p(max(active_pid_count, 0)) / math.log1p(64.0))
+    window_score = math.sqrt(max(0.0, min(active_window_ratio, 1.0)))
+    quality = max(0.0, min(pid_score * window_score, 1.0))
+    return active_window_ratio, quality
 
 
 def score_to_band(percentile: float) -> str:
@@ -95,7 +90,7 @@ def main() -> None:
                         help="Z-score 归一化特征（模型输入）")
     parser.add_argument("--output", default="train_set/anchor_set.parquet",
                         help="锚点集输出路径")
-    parser.add_argument("--anchors", nargs="+", default=["O0", "O3"],
+    parser.add_argument("--anchors", nargs="+", default=["O0", "O2", "O3"],
                         help="用作锚点的变体列表（第一个视为基准，S=0）")
     args = parser.parse_args()
 
@@ -110,6 +105,8 @@ def main() -> None:
     # ── 读取数据 ──
     df_raw    = pd.read_parquet(raw_path)
     df_zscore = pd.read_parquet(zscore_path)
+    if DROPPED_INPUT_FEATURES:
+        print(f"[info] 已从锚点输入中剔除死特征: {', '.join(DROPPED_INPUT_FEATURES)}")
 
     # 建立 (program, variant) 快速查找
     raw_map = {
@@ -148,6 +145,7 @@ def main() -> None:
             cycles_k  = max(float(row_raw.get("cycles_per_iter", 0))
                            or float(row_raw["total_cycles"]), 1)
             score_gt  = math.log(cycles_base / cycles_k)  # S_k = log(cpi_O0 / cpi_k)
+            active_window_ratio, anchor_quality = _anchor_quality_from_row(row_raw)
 
             # anchor_role：第一个变体为 baseline，其余为 reference
             anchor_role = "baseline" if variant == baseline_variant else "reference"
@@ -158,6 +156,10 @@ def main() -> None:
                 "cycles_per_iter": round(cycles_k, 1),
                 "total_cycles":    int(row_raw.get("total_cycles", 0)),
                 "active_pid_count": int(row_raw.get("active_pid_count", 1)),
+                "window_count":    int(row_raw.get("window_count", 0) or 0),
+                "active_window_count": int(row_raw.get("active_window_count", 0) or 0),
+                "active_window_ratio": round(active_window_ratio, 6),
+                "anchor_quality":  round(anchor_quality, 6),
                 "score_gt":        round(score_gt, 6),
                 "anchor_role":     anchor_role,
             }
@@ -188,6 +190,13 @@ def main() -> None:
         "anchor_variants":  anchor_variants,
         "n_programs":       programs_ok,
         "n_anchors":        len(df_anchors),
+        "anchors_by_variant": {
+            str(var): int((df_anchors["variant"] == var).sum())
+            for var in anchor_variants
+        },
+        "anchor_quality_mean": round(float(df_anchors["anchor_quality"].mean()), 4),
+        "anchor_quality_min":  round(float(df_anchors["anchor_quality"].min()), 4),
+        "anchor_quality_max":  round(float(df_anchors["anchor_quality"].max()), 4),
         "score_min":        round(float(all_scores.min()), 4),
         "score_max":        round(float(all_scores.max()), 4),
         "score_p5":         round(score_p5,  4),
@@ -203,6 +212,8 @@ def main() -> None:
     print(f"{'='*60}")
     print(f"  程序数: {programs_ok}  （跳过 {programs_skip}，缺少 {baseline_variant}）")
     print(f"  锚点总数: {len(df_anchors)}")
+    print(f"  锚点质量: mean={stats['anchor_quality_mean']:.3f}  "
+          f"min={stats['anchor_quality_min']:.3f}  max={stats['anchor_quality_max']:.3f}")
     print()
     print(f"  score_gt = log(cycles_{baseline_variant} / cycles_k)  [固定工作量对数时间比]")
     print(f"  分数分布：min={stats['score_min']:.3f}  max={stats['score_max']:.3f}  "
