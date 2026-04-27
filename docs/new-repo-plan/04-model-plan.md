@@ -554,7 +554,7 @@ $$
     "machine_id": "i7-6700-fc44",
     "window_sec": 1.0,
     "aggregation_scope": "per_pid",
-    "collection_backend": "bcc"
+    "collection_backend": "hybrid_perf_event_open_bcc"
   },
   "score": {
     "optimization_score": 61.4,

@@ -6,10 +6,10 @@
   ],
   "n_programs": 145,
   "n_anchors": 290,
-  "score_min": -2.6813,
-  "score_max": 14.7822,
+  "score_min": -2.0936,
+  "score_max": 12.4298,
   "score_p5": 0.0,
-  "score_p95": 3.2698,
-  "score_mean": 0.8888,
-  "score_std": 1.9138
+  "score_p95": 4.3998,
+  "score_mean": 1.1179,
+  "score_std": 1.9184
 }

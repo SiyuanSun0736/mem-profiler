@@ -5,17 +5,17 @@
   "input_dim": 162,
   "tie_threshold": 0.05,
   "label_counts": {
-    "j_better": 681,
-    "i_better": 681,
-    "tie": 378
+    "j_better": 684,
+    "i_better": 684,
+    "tie": 372
   },
   "log_ratio_stats": {
     "mean": 0.0,
-    "std": 2.3092,
-    "min": -14.7822,
-    "max": 14.7822,
-    "p25": -0.599,
+    "std": 2.1906,
+    "min": -12.4298,
+    "max": 12.4298,
+    "p25": -0.7007,
     "median": 0.0,
-    "p75": 0.599
+    "p75": 0.7007
   }
 }

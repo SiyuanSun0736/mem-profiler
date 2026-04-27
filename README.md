@@ -42,6 +42,11 @@ ebpf-mem-profiler/
 │   └── report.py               # matplotlib 图表生成
 ├── export/
 │   └── to_baseline.py          # 格式转换适配器
+├── scripts/
+│   ├── freeze_curated_manifest.py # 冻结 145x4 curated run list
+│   ├── build_run_features.py   # 原始窗口 → 运行级特征
+│   ├── build_pair_table.py     # 运行级特征 → pair 数据
+│   └── build_anchor_set.py     # pair 结果 → 锚点集
 ├── experiments/
 │   ├── llvm_test_suite/       # llvm-test-suite 提取与 PMU 采集脚本
 │   ├── overhead/               # P3：采集开销测试
@@ -57,6 +62,18 @@ ebpf-mem-profiler/
 ├── Makefile                    # 编译 CO-RE eBPF 程序
 └── requirements.txt            # Python 依赖
 ```
+
+---
+
+## llvm-test-suite 数据口径
+
+当前仓库里和 llvm-test-suite 相关的数据，需要明确区分 raw 采集层和训练快照层。
+
+1. 最新 raw manifests 位于 `data/llvm_test_suite/manifest_bcc_O0~O3.jsonl`，它们不等同于现有 `train_set` 使用的冻结快照。
+2. 当前 raw snapshot 的记录数是 `O0=283`、`O1=145`、`O2=145`、`O3=145`；其中 `O0` 含重复采集记录，并且至少有 1 条 manifest 指向缺失输出目录。
+3. 为了把最新 raw data 冻结成可复现的 `145 x 4` run list，仓库现在提供 `manifest_curated_O0~O3.jsonl`。它们的选择规则是：对每个 `program x variant` 只保留“时间戳最新且目录完整”的 run。
+4. 如果要从最新 raw data 重建运行级特征，应优先使用 curated manifests，而不是直接顺序扫描 raw manifests。
+5. 现有 `train_set` 和模型评估结果仍然来自更早一轮冻结快照；这一点与 [docs/new-repo-plan/README.md](docs/new-repo-plan/README.md) 保持一致。
 
 ---
 
@@ -261,6 +278,15 @@ sudo bash experiments/llvm_test_suite/collect_dataset_testbench.sh
 
 # 一次顺序采集 data/llvm_test_suite 下全部 VARIANT（自动检测 O0/O1/O2/O3）
 sudo bash experiments/llvm_test_suite/collect_dataset_all_variants.sh
+
+# 将最新 raw manifests 冻结为可复现的 145x4 curated run list
+python scripts/freeze_curated_manifest.py --data-root data/llvm_test_suite
+
+# 基于 curated manifests 重建运行级特征
+python scripts/build_run_features.py \
+    --data-root data/llvm_test_suite \
+    --manifest-prefix manifest_curated \
+    --output train_set_curated
 ```
 
 默认输出：
@@ -268,7 +294,15 @@ sudo bash experiments/llvm_test_suite/collect_dataset_all_variants.sh
 - `data/llvm_test_suite/test/<VARIANT>`：对应 .test 与运行时文件
 - `data/llvm_test_suite/bcc/<VARIANT>/<bench>_<timestamp>/`：BCC JSONL 采集结果
 - `data/llvm_test_suite/manifest_bcc_<VARIANT>.jsonl`：批量采集清单
+- `data/llvm_test_suite/manifest_curated_<VARIANT>.jsonl`：冻结后的 145x4 curated run list
+- `data/llvm_test_suite/manifest_curated_summary.json`：curated run list 汇总信息
 - `results/llvm_test_suite/log/`：批量脚本运行日志
+
+说明：
+
+1. `manifest_bcc_<VARIANT>.jsonl` 表示最新 raw 采集清单，不保证天然是干净的 `145 x 4` 训练输入。
+2. `manifest_curated_<VARIANT>.jsonl` 才是“按最新完整 run 冻结”后的可复现 run list。
+3. 如果后续要重建 `run_features`、`pairs` 或 `anchor_set`，建议从 curated manifests 开始。
 
 ---
 

@@ -61,6 +61,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DATASET_ROOT="${DATASET_ROOT:-$PROJECT_ROOT/data/llvm_test_suite}"
 RUN_ROOT="${RUN_ROOT:-$PROJECT_ROOT/results/llvm_test_suite}"
 LOG_DIR="${LOG_DIR:-$RUN_ROOT/log}"
+LOCK_DIR="${LOCK_DIR:-$RUN_ROOT/lock}"
 
 VARIANT="${VARIANT:-O3}"
 BIN_DIR="${BIN_DIR:-}"
@@ -173,6 +174,8 @@ COUNT_OK=0
 COUNT_SKIP=0
 CURRENT_CHILD_PID=""
 TEE_PID=""
+LOCK_FILE=""
+LOCK_FD=""
 _CLEANUP_DONE=0
 
 wait_for_pid_exit() {
@@ -187,6 +190,30 @@ wait_for_pid_exit() {
         sleep 0.1
     done
     return 1
+}
+
+acquire_variant_lock() {
+    command -v flock >/dev/null 2>&1 || {
+        echo "Error: flock 不存在，无法启用采集互斥锁" >&2
+        exit 1
+    }
+
+    mkdir -p "$LOCK_DIR"
+    LOCK_FILE="$LOCK_DIR/collect_dataset_testbench_${VARIANT}.lock"
+    exec {LOCK_FD}> "$LOCK_FILE"
+
+    if ! flock -n "$LOCK_FD"; then
+        echo "Error: VARIANT=$VARIANT 已有采集进程运行中，锁文件: $LOCK_FILE" >&2
+        exit 1
+    fi
+}
+
+release_variant_lock() {
+    [[ -n "$LOCK_FD" ]] || return
+
+    flock -u "$LOCK_FD" 2>/dev/null || true
+    eval "exec ${LOCK_FD}>&-"
+    LOCK_FD=""
 }
 
 cleanup() {
@@ -208,6 +235,8 @@ cleanup() {
         wait "$TEE_PID" 2>/dev/null || true
     fi
     TEE_PID=""
+
+    release_variant_lock
 }
 
 trap 'cleanup; exit 130' INT
@@ -309,7 +338,12 @@ if [[ "$DRYRUN" -eq 0 && "$EUID" -ne 0 ]]; then
     exit 1
 fi
 
+if [[ "$DRYRUN" -eq 0 ]]; then
+    acquire_variant_lock
+fi
+
 info "记录脚本输出到: ${LOGFILE#$PROJECT_ROOT/}"
+[[ -n "$LOCK_FILE" ]] && info "采集锁:        ${LOCK_FILE#$PROJECT_ROOT/}"
 
 bold "======================================================"
 bold "     BCC 批量采集：$VARIANT 预编译基准"

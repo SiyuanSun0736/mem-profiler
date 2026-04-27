@@ -8,7 +8,7 @@
 
 | 里程碑 | 状态 | 当前证据 | 判断 |
 | --- | --- | --- | --- |
-| M0. 冻结数据集边界 | 已完成 | 已明确当前数据是 145 个程序的 O0-O3 单次运行代理数据 | 方案边界终于和数据一致了 |
+| M0. 冻结数据集边界 | 已完成 | 已明确建模使用的是 145x4 冻结训练快照，而最新 raw 采集层仍需单独冻结 | 方案边界终于和数据一致了 |
 | M1. 跑通运行级样本构建 | 已完成 | 已有 `run_features.parquet` | 运行级摘要主输入已经稳定存在 |
 | M2. 跑通成对建模闭环 | 已完成 | 已有 `pairs.parquet`、MLP、PairTransformer 结果 | pairwise 主任务已经成立 |
 | M3. 跑通单程序评分 | 部分完成 | 已有 `anchor_set.parquet`、`scores.parquet`、`score_eval.json` | 分数可用，但还需要用时间评分做最终闭环验证 |
@@ -18,18 +18,96 @@
 
 如果按这套重设计后的目标估算，当前整体完成度更接近 70%，而不是 55%。原因不是工作变多了，而是目标终于和真实数据匹配了。
 
+这里有一个必须固定下来的前提：当前仓库同时存在两个数据口径。最新 raw manifest 的记录数是 `283/145/145/145`，而现有 `train_set` 仍是冻结的 `580` runs 快照。后续所有模型指标和里程碑判断，都应默认指向后者；凡是涉及“重建训练集”的工作，再回到前者。
+
 ### 0.1 当前量化结果
 
-1. 145 个程序，580 条运行记录，1740 条 pair，290 条锚点记录。
-2. Phase 1 MLP 测试集：MAE 0.5517，R² 0.7590，`dir_acc=0.8125`，`acc_3cls=0.6667`。
-3. PairTransformer 测试集：MAE 0.5316，R² 0.6335，`dir_acc=0.9010`，`acc_3cls=0.8030`。
-4. 单程序评分：当前 proxy 口径已可产出，但最终仍需补 `score_model` 对 `score_time` 的外部验证。
+> 最后更新：2026-04-27（全流程实测）
+
+**数据规模（最新 raw manifest 口径，非冻结快照）：**
+
+- 145 个程序，717 条运行记录（O0=282，O1=145，O2=145，O3=145）
+- 1740 条 pair，290 条锚点记录
+
+**朴素基线（variant 名义排名）：** test MAE=1.0899，R²=0.0522，`dir_acc=0.8182`，`acc_3cls=0.614`
+
+**Ridge 线性基线（α=1.0，162维输入）：** test MAE=3.4759，R²=-56.83，`dir_acc=0.8283`，`acc_3cls=0.644`（严重过拟合）
+
+**Phase 1 MLP（隐层=128/64/32，162维输入）：** train MAE=0.075 / test MAE=2.7349，R²=-37.32，`dir_acc=0.7879`，`acc_3cls=0.659`（严重过拟合）
+
+**PairTransformer（d_model=64，nhead=4，3层）：** val MAE=0.2751，test MAE=0.5881，R²=0.5938，`dir_acc=0.7828`，`acc_3cls=0.735`（早停 epoch=96）
+
+**单程序评分（proxy 口径）：** MAE=0.4484，Pearson r=0.8280，`dir_acc=0.5667`，`band_acc=0.6909`
+
+**时间评分外部验证（score_time，可靠行 612/701）：**
+- proxy vs score_time：Pearson r=0.4874，Spearman ρ=0.3062，`band_acc=0.8840`
+- model vs score_time：Pearson r=0.4123，Spearman ρ=0.2065，`band_acc=0.8562`
 
 ### 0.2 当前判断
 
 1. non-time 运行级特征已经能恢复方向，代理任务成立。
 2. Transformer 当前更适合做方向判断器，而不一定是更好的纯回归器。
 3. 单程序评分已经可展示，但还不够稳，仍需靠锚点、证据设计，以及独立时间评分验证继续补强。
+
+---
+
+## 0.3 全流程执行日志（2026-04-27）
+
+**执行环境**：Python `.venv`，CPU only（无 GPU），最新 raw manifest（非冻结快照）
+
+**执行命令序列及结果：**
+
+```bash
+# Step 1: 特征构建
+.venv/bin/python scripts/build_run_features.py
+# → 717 行，96 列；1 条缺失 window_metrics.jsonl（BitBench_uudecode_20260426_223145）被跳过
+# → minor_fault_ratio 方差为零（全零列，已置 0）
+# → 输出：run_features.parquet / run_features_zscore.parquet / feature_scaler.json
+
+# Step 2: pair 表构建
+.venv/bin/python scripts/build_pair_table.py
+# → 1740 条 pair，145 个程序
+# → i_better=684(39.3%)，tie=372(21.4%)，j_better=684(39.3%)
+
+# Step 3: anchor set 构建
+.venv/bin/python scripts/build_anchor_set.py
+# → 290 条锚点，145 个程序（O0 全部可用）
+
+# Step 4: 模型训练（MLP）
+.venv/bin/python scripts/train_model.py
+# → [错误] 缺少 scikit-learn → pip install scikit-learn 后修复
+# → MLP 严重过拟合（162 维特征，~1200 训练对）
+# → train MAE=0.075 vs test MAE=2.73，线性基线 test R²=-56.83
+
+# Step 5: 模型训练（Transformer）
+.venv/bin/python scripts/train_transformer.py
+# → [错误] 缺少 torch → pip install torch --index-url .../cpu 后修复
+# → 早停 epoch=96，val_loss=0.0907
+# → test MAE=0.5881，R²=0.5938，dir_acc=0.7828，acc_3cls=0.735
+# → O2-O3 pair 方向准确率仅 0.50（最难）
+
+# Step 6: 评分推断
+.venv/bin/python scripts/score_program.py --device cpu
+# → 717 条评分，Pearson r=0.8280（vs proxy），dir_acc=0.5667，band_acc=0.6909
+
+# Step 7: 时间评分验证
+.venv/bin/python scripts/build_time_score_table.py
+.venv/bin/python scripts/evaluate_score_vs_time.py
+# → 过滤 89 行（active_pid_count < 5），可靠行 612/701
+# → model vs score_time：Pearson r=0.4123，Spearman ρ=0.2065
+# → proxy vs score_time：Pearson r=0.4874，Spearman ρ=0.3062
+```
+
+**发现的问题：**
+
+| # | 问题 | 修复方式 |
+|---|------|----------|
+| 1 | `requirements.txt` 缺少 `scikit-learn` | 已追加 `scikit-learn>=1.3.0` |
+| 2 | `requirements.txt` 缺少 `torch` | 已追加 `torch>=2.0.0` |
+| 3 | MLP（162维输入）严重过拟合，test R²=-37.3 | 需正则化或降维，属 TODO 5/P1 |
+| 4 | O0 有重复采集（282条 vs 145条），`build_pair_table` 会重复计入 | 应在 M0 阶段先冻结 run list |
+| 5 | `score_time` 外部验证 Spearman ρ 仅 0.21，说明 wall_time proxy 与真实时间相关性弱 | 需独立 fixed-work timing 数据（TODO 2.5） |
+| 6 | `minor_fault_ratio` 全为零（方差零列）| 正常现象（测试集无 minor fault mix），已跳过标准化 |
 
 ## 1. 当前最合适的项目结构
 
@@ -63,6 +141,11 @@ dataset-first-optimization-plan/
 这说明当前主线已经很清楚：先把已有脚本和产物收束成一个稳定闭环，而不是先扩展更多目录和中间层。
 
 ## 2. 代码组织原则
+
+### 原则 0. 先冻结 run list，再谈重训
+
+1. 当前 raw manifest 不是稳定的 `145 x 4` clean view，至少 `O0` 仍保留了重复采集和缺失目录。
+2. 因此任何“从 raw data 重新生成 `train_set`”的动作，都应先输出一份冻结的 run manifest 或 curated run list。
 
 ### 原则 1. 原始 JSONL 只做两件事
 
@@ -113,6 +196,7 @@ dataset-first-optimization-plan/
 
 1. 运行级特征列固定
 2. train/test 划分前的样本清洗规则固定
+3. 如果输入来自最新 raw manifest，先固定 manifest 版本或 curated run list，再运行特征构建
 
 ### M2. 稳定 pairwise 建模
 

@@ -4,22 +4,41 @@
 
 ## 1. 当前数据快照
 
-现有数据不是从零设计的新数据集，而是已经落盘的 llvm-test-suite BCC 采集结果。基于 manifest、原始 JSONL 和训练产物，可以确认下面这些事实：
+现有数据不是从零设计的新数据集，而是已经落盘的 llvm-test-suite 采集结果。但这里的“当前数据”实际上有两个层次：原始采集快照和现有训练快照。文档如果不把两者拆开，就会把 raw 层的重复采样误写成已经冻结好的训练视图。
 
-1. 数据根目录是 `data/llvm_test_suite/bcc/O0~O3`。
-2. 每个程序有 4 个变体：`O0`、`O1`、`O2`、`O3`。
-3. 当前共覆盖 145 个程序，因此总运行数是 580。
-4. 每次运行默认观测 60 秒，聚合窗口是 1.0 秒。
-5. 当前数据来自同一台机器，没有多机采样维度。
-6. 当前没有 repeat 维度，本质上是“每个 program × variant 一次运行”。
+### 1.1 原始采集快照
 
-这意味着第一阶段任务必须是“单次运行、单机、程序内相对比较”的问题，而不是“重复稳定性”和“跨平台泛化”的问题。
+基于 `manifest_bcc_*.jsonl`、目录结构和样本 JSONL，可以确认下面这些事实：
+
+1. 原始数据根目录是 `data/llvm_test_suite/bcc/O0~O3`。
+2. 当前 raw manifest 条数分别是：`O0=283`、`O1=145`、`O2=145`、`O3=145`。
+3. `O0` manifest 虽然仍然只覆盖 145 个 unique program，但包含大量重复 program 记录，说明当前 `O0` 目录不是“每个 program 只保留一条”的冻结视图。
+4. 至少有 1 条 `O0` manifest 记录指向缺失输出目录 `BitBench_uudecode_20260426_223145`，因此当前 raw manifest 也不是完全自洽的最终训练输入。
+5. 单次 raw run 目录至少包含两类文件：`run_metadata.jsonl` 和 `window_metrics.jsonl`。从真实样本可以看到，`run_metadata.jsonl` 已记录 `enabled_probes`、`host_info`、`aggregation_scope` 以及 `collection_backend=hybrid_perf_event_open_bcc`。
+6. 当前 raw run 仍然是单机、约 60 秒观测、1.0 秒窗口、按 PID 聚合，没有 repeat 和多机维度。
+
+### 1.2 冻结训练快照
+
+基于 `train_set/pairs_stats.json`、`train_set/anchor_set.stats.json` 和 `train_set/feature_scaler.json`，可以确认当前训练闭环使用的是另一个冻结视图：
+
+1. 145 个 program。
+2. 580 条运行级记录，也就是每个 program 保留 4 个 variant。
+3. 1740 条 pair。
+4. 290 条 anchor。
+5. 现有模型评估、pair 统计和单程序评分结果都基于这个冻结训练快照，而不是直接基于最新 raw manifest 即时重建。
+6. `train_set/run_features.csv` 中保存的 `output_dir` 指向更早一轮 2026-04-23 采集路径，因此现有训练产物与当前附带的 2026-04-26/27 raw 目录不是同一批 snapshot。
+
+### 1.3 这对建模意味着什么
+
+1. 第一阶段建模对象应该继续定义为“冻结训练快照上的单次运行、单机、程序内相对比较”。
+2. 如果要用最新 raw data 重建 `train_set`，必须先显式冻结 snapshot 或增加去重/选优规则；当前 `build_run_features.py` 只是顺序遍历 manifest，不会自动去重。
+3. 因此本阶段的主要变量应继续放在特征工程和验证，而不是假设 raw 采集层已经天然等价于 `145 x 4` clean dataset。
 
 ## 2. 原始文件层
 
 每次运行至少包含两类文件：
 
-1. `run_metadata.jsonl`：运行起止时间、目标进程、窗口大小、采样率、后端信息。
+1. `run_metadata.jsonl`：运行起止时间、目标进程、窗口大小、采样率、后端信息，以及 probe 开关和主机信息。
 2. `window_metrics.jsonl`：按 `window_id × pid` 聚合后的窗口级指标。
 
 当前真实数据里，`window_metrics.jsonl` 已经提供了比当前训练特征更多的字段，因此后续扩展特征时不应先重采数据，而应先吃透现有原始字段。
@@ -212,11 +231,14 @@
 
 现阶段最合理的策略不是新建更多抽象层，而是把下面这条最小数据链路做扎实：
 
-1. 原始 `window_metrics.jsonl`
-2. 运行级 `run_features.parquet`
-3. 成对 `pairs.parquet`
-4. 锚点 `anchor_set.parquet`
-5. 评分输出 `scores.parquet`
+1. 冻结后的 run manifest / curated run list
+2. 原始 `window_metrics.jsonl`
+3. 运行级 `run_features.parquet`
+4. 成对 `pairs.parquet`
+5. 锚点 `anchor_set.parquet`
+6. 评分输出 `scores.parquet`
+
+在当前这批数据上，这第一步不是形式主义。因为最新 `O0` raw manifest 仍然包含重复采样和缺失目录，不先冻结 run list，后续统计就不具备可复现性。
 
 窗口级原始数据不再承担“协议层”的职责，而只承担两类工作：
 

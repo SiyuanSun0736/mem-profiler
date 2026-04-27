@@ -1,6 +1,6 @@
 # 新方案总览
 
-> 状态：已按现有真实数据重设计；截至 2026-04-26，方案不再围绕“未来布局基准”，而是围绕已经拿到的 llvm-test-suite O0/O1/O2/O3 数据集展开  
+> 状态：已按现有真实数据重设计；截至 2026-04-27，方案不再围绕“未来布局基准”，而是围绕已经拿到的 llvm-test-suite O0/O1/O2/O3 原始采集结果与现有训练快照展开  
 > 目标：把现有 BCC 数据沉淀成一个可验证、可扩展的优化级别代理任务方案
 
 本文档集不再从“理想中的新数据集”反推设计，而是从当前已经存在的数据出发，回答三个更现实的问题：
@@ -33,11 +33,12 @@
 
 目前已经确认的关键约束如下：
 
-1. 数据来自 `data/llvm_test_suite/bcc/O0~O3`，不是专门构造的布局基准。
-2. 每个程序对应 4 个变体 `O0/O1/O2/O3`，共 145 个程序、580 条运行记录。
-3. 每条运行是单机、约 60 秒观测、1 秒窗口、按 PID 聚合的 JSONL 数据。
-4. 当前没有 repeat 维度，没有多机维度，也没有 AoS/SoA/blocking 这类布局 family。
-5. 当前训练闭环已经存在：`run_features.parquet`、`pairs.parquet`、`anchor_set.parquet`、MLP、Transformer、单程序评分。
+1. 原始数据根目录来自 `data/llvm_test_suite/bcc/O0~O3`，不是专门构造的布局基准。
+2. 当前 raw manifest 不是严格的 `145 x 4`：`O1/O2/O3` 各有 145 条记录，但 `O0` manifest 有 283 条记录，只对应 145 个 unique program，说明 `O0` 存在重复采集；其中至少有 1 条 manifest 指向缺失输出目录。
+3. 当前每次 raw run 至少包含 `run_metadata.jsonl` 与 `window_metrics.jsonl`；`run_metadata.jsonl` 已记录 `enabled_probes`、`host_info`、`aggregation_scope` 和 `collection_backend=hybrid_perf_event_open_bcc`。
+4. 当前 train_set 对应的是一个冻结训练快照：145 个程序、580 条运行记录、1740 条 pair、290 条锚点。这才是现有模型结果的真实数据口径。
+5. 这个训练快照不等同于最新 raw 目录：`run_features.csv` 里保存的 `output_dir` 指向更早一轮采集路径，因此“最新 raw data”和“当前训练产物”必须分开叙述。
+6. 当前没有 repeat 维度，没有多机维度，也没有 AoS/SoA/blocking 这类布局 family。
 
 ## 现阶段最合理的闭环
 
@@ -53,6 +54,8 @@
 ## 当前结果给出的结论
 
 现有结果已经足够支持一个更聚焦的结论：这批 non-time 运行级摘要特征对“优化级别方向恢复”是有信号的，但它们证明的是 O0-O3 代理任务，不是通用的布局优化结论。
+
+下面这些指标全部基于当前冻结的 train_set 快照，而不是直接由最新 raw manifest 即时重算。
 
 1. `pairs.parquet` 覆盖 1740 条 pair，145 个程序，标签分布相对均衡。
 2. Phase 1 MLP 在测试集上的方向准确率为 0.8125，三分类准确率为 0.6667。
