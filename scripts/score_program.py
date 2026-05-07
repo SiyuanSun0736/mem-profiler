@@ -43,6 +43,15 @@ score_program.py — 单程序优化分数推断（方案 A：参考锚点法 ·
 
   # 强制 CPU
   python scripts/score_program.py --device cpu
+
+    # 若更关注时间外部验证而不是 proxy 评分，可切回 time-first tuned 参数
+    python scripts/score_program.py --tuned-selection-objective time
+
+    # 将评估 JSON 写到自定义路径，便于并存多套结果
+    python scripts/score_program.py \
+            --output train_set/scores_time_first.parquet \
+            --eval-output train_set/score_eval_time_first.json \
+            --tuned-selection-objective time
 """
 
 from __future__ import annotations
@@ -78,6 +87,9 @@ DEFAULT_MIN_ANCHOR_QUALITY = 0.30
 DEFAULT_OUTLIER_MAD_SCALE = 3.0
 DEFAULT_OUTLIER_MIN_DELTA = 0.35
 DEFAULT_TUNED_DEFAULTS_JSON = "train_set/score_tune_fine_variant_best.json"
+DEFAULT_MIN_RELIABLE_TUNE_SCORE_VALID = 32
+DEFAULT_MIN_RELIABLE_TUNE_TIME_VALID = 32
+DEFAULT_TUNED_SELECTION_OBJECTIVE = "score"
 
 # ── 瓶颈归因特征分组 ───────────────────────────────────────────────────────────
 # 每组特征的 z-score 均值作为该类瓶颈的 severity（值越高压力越大）
@@ -286,7 +298,48 @@ def _filter_anchor_estimates(
     return anchor_estimates
 
 
-def _load_tuned_variant_defaults(path: pathlib.Path) -> dict[str, dict[str, float]]:
+def _is_finite_number(value: Any) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_reliable_tuned_best(
+    best: dict[str, Any],
+    shared_best: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    n_score_valid = int(best.get("n_score_valid", 0) or 0)
+    n_time_valid = int(best.get("n_time_valid", 0) or 0)
+    score_corr = best.get("score_corr")
+    time_corr = best.get("time_corr")
+
+    if n_score_valid < DEFAULT_MIN_RELIABLE_TUNE_SCORE_VALID:
+        return False, f"n_score_valid<{DEFAULT_MIN_RELIABLE_TUNE_SCORE_VALID}"
+    if not _is_finite_number(score_corr):
+        return False, "score_corr_not_finite"
+    if n_time_valid < DEFAULT_MIN_RELIABLE_TUNE_TIME_VALID:
+        return False, f"n_time_valid<{DEFAULT_MIN_RELIABLE_TUNE_TIME_VALID}"
+    if not _is_finite_number(time_corr):
+        return False, "time_corr_not_finite"
+    if float(time_corr) < 0.0:
+        return False, "time_corr_negative"
+
+    if not shared_best:
+        return True, "ok"
+
+    shared_score_corr = shared_best.get("score_corr")
+    if _is_finite_number(shared_score_corr):
+        # 若局部 score_corr 明显落后于共享参数，则优先回退到 ALL。
+        if float(score_corr) + 1e-6 < float(shared_score_corr) - 0.02:
+            return False, "score_corr_much_worse_than_all"
+    return True, "ok"
+
+
+def _load_tuned_variant_defaults(
+    path: pathlib.Path,
+    selection_objective: str = DEFAULT_TUNED_SELECTION_OBJECTIVE,
+) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
     try:
@@ -295,7 +348,10 @@ def _load_tuned_variant_defaults(path: pathlib.Path) -> dict[str, dict[str, floa
         print(f"[warn] 读取 tuned defaults 失败: {path} ({exc})")
         return {}
 
-    best_by_variant = data.get("best_by_variant")
+    if selection_objective == "score":
+        best_by_variant = data.get("best_for_score_by_variant") or data.get("best_by_variant")
+    else:
+        best_by_variant = data.get("best_by_variant")
     if not isinstance(best_by_variant, dict):
         return {}
 
@@ -307,28 +363,53 @@ def _load_tuned_variant_defaults(path: pathlib.Path) -> dict[str, dict[str, floa
         "anchor_outlier_mad_scale",
         "anchor_outlier_min_delta",
     }
-    variant_defaults: dict[str, dict[str, float]] = {}
+    raw_best_by_variant: dict[str, dict[str, Any]] = {}
     for variant, payload in best_by_variant.items():
         if not isinstance(payload, dict):
             continue
         best = payload.get("best")
         if not isinstance(best, dict):
             continue
+        raw_best_by_variant[str(variant)] = best
+
+    shared_best = raw_best_by_variant.get("ALL")
+    variant_defaults: dict[str, dict[str, Any]] = {}
+    for variant, best in raw_best_by_variant.items():
         picked = {
             key: float(best[key])
             for key in param_keys
             if key in best and best[key] is not None
         }
         if picked:
-            variant_defaults[str(variant)] = picked
+            is_reliable, reliability_reason = _is_reliable_tuned_best(best, shared_best)
+            variant_defaults[str(variant)] = {
+                "params": picked,
+                "reliable": bool(is_reliable),
+                "reason": reliability_reason,
+                "metrics": {
+                    "n_runs": int(best.get("n_runs", 0) or 0),
+                    "n_time_valid": int(best.get("n_time_valid", 0) or 0),
+                    "n_score_valid": int(best.get("n_score_valid", 0) or 0),
+                    "time_corr": (
+                        float(best.get("time_corr"))
+                        if _is_finite_number(best.get("time_corr"))
+                        else None
+                    ),
+                    "score_corr": (
+                        float(best.get("score_corr"))
+                        if _is_finite_number(best.get("score_corr"))
+                        else None
+                    ),
+                },
+            }
     return variant_defaults
 
 
 def _resolve_scoring_params(
     query_variant: str,
     cli_overrides: dict[str, float | None],
-    tuned_defaults: dict[str, dict[str, float]],
-) -> dict[str, float]:
+    tuned_defaults: dict[str, dict[str, Any]],
+) -> tuple[dict[str, float], dict[str, Any]]:
     fallback_defaults = {
         "tie_gate_threshold": DEFAULT_TIE_GATE_THRESHOLD,
         "tie_shrink_power": DEFAULT_TIE_SHRINK_POWER,
@@ -337,20 +418,37 @@ def _resolve_scoring_params(
         "anchor_outlier_mad_scale": DEFAULT_OUTLIER_MAD_SCALE,
         "anchor_outlier_min_delta": DEFAULT_OUTLIER_MIN_DELTA,
     }
-    variant_defaults = tuned_defaults.get(query_variant, {})
-    shared_defaults = tuned_defaults.get("ALL", {})
+    variant_entry = tuned_defaults.get(query_variant, {})
+    shared_entry = tuned_defaults.get("ALL", {})
+    variant_defaults = variant_entry.get("params", {}) if isinstance(variant_entry, dict) else {}
+    shared_defaults = shared_entry.get("params", {}) if isinstance(shared_entry, dict) else {}
+    variant_reliable = bool(variant_entry.get("reliable", False)) if isinstance(variant_entry, dict) else False
+
+    resolution_meta = {
+        "query_variant": query_variant,
+        "variant_tuned_available": bool(variant_defaults),
+        "variant_tuned_reliable": variant_reliable,
+        "variant_tuned_reason": variant_entry.get("reason") if isinstance(variant_entry, dict) else None,
+        "shared_tuned_available": bool(shared_defaults),
+        "source_by_key": {},
+    }
+
     resolved: dict[str, float] = {}
     for key, fallback in fallback_defaults.items():
         override = cli_overrides.get(key)
         if override is not None:
             resolved[key] = float(override)
-        elif key in variant_defaults:
+            resolution_meta["source_by_key"][key] = "cli"
+        elif variant_reliable and key in variant_defaults:
             resolved[key] = float(variant_defaults[key])
+            resolution_meta["source_by_key"][key] = f"variant:{query_variant}"
         elif key in shared_defaults:
             resolved[key] = float(shared_defaults[key])
+            resolution_meta["source_by_key"][key] = "variant:ALL"
         else:
             resolved[key] = float(fallback)
-    return resolved
+            resolution_meta["source_by_key"][key] = "builtin"
+    return resolved, resolution_meta
 
 
 # ── 模型加载 ───────────────────────────────────────────────────────────────────
@@ -491,8 +589,13 @@ def main() -> None:
     parser.add_argument("--anchor-set", default="train_set/anchor_set.parquet")
     parser.add_argument("--zscore",     default="train_set/run_features_zscore.parquet")
     parser.add_argument("--output",     default="train_set/scores.parquet")
+    parser.add_argument("--eval-output", default=None,
+                        help="评估 JSON 输出路径；默认写到 train_set/score_eval.json")
     parser.add_argument("--tuned-defaults-json", default=DEFAULT_TUNED_DEFAULTS_JSON,
                         help="按 variant 覆盖评分默认值的 tuned JSON；CLI 显式传参优先")
+    parser.add_argument("--tuned-selection-objective", choices=["score", "time"],
+                        default=DEFAULT_TUNED_SELECTION_OBJECTIVE,
+                        help="从 tuned JSON 中选择 score-first 还是 time-first 的最优参数")
     parser.add_argument("--device",     default=None)
     parser.add_argument("--tie-gate-threshold", type=float, default=None,
                         help="辅助分类头判为 tie 时将回归输出压到 0 的阈值")
@@ -522,7 +625,10 @@ def main() -> None:
 
     device = select_device(args.device)
     model  = load_model(model_path, device)
-    tuned_defaults = _load_tuned_variant_defaults(tuned_defaults_path)
+    tuned_defaults = _load_tuned_variant_defaults(
+        tuned_defaults_path,
+        selection_objective=args.tuned_selection_objective,
+    )
     cli_overrides = {
         "tie_gate_threshold": args.tie_gate_threshold,
         "tie_shrink_power": args.tie_shrink_power,
@@ -538,7 +644,10 @@ def main() -> None:
         print(f"[info] 已从评分输入中剔除死特征: {', '.join(DROPPED_INPUT_FEATURES)}")
     if tuned_defaults:
         available_variants = ", ".join(sorted(tuned_defaults.keys()))
-        print(f"[info] 已加载 variant 默认参数: {available_variants}")
+        print(
+            f"[info] 已加载 variant 默认参数: {available_variants} "
+            f"(objective={args.tuned_selection_objective})"
+        )
 
     # 读取 anchor stats（用于 0-100 归一化）
     stats_path = anchor_path.with_suffix(".stats.json")
@@ -579,7 +688,7 @@ def main() -> None:
         if not anchors:
             anchors = anchor_map.get(prog, [])
 
-        scoring_params = _resolve_scoring_params(
+        scoring_params, scoring_param_meta = _resolve_scoring_params(
             query_variant=variant,
             cli_overrides=cli_overrides,
             tuned_defaults=tuned_defaults,
@@ -615,6 +724,7 @@ def main() -> None:
             "band":        band,
             "n_anchors":   len(anchors),
             "n_anchors_used": int(result.get("n_anchors_used", len(anchors))),
+            "scoring_param_resolution": json.dumps(scoring_param_meta, ensure_ascii=False),
             # 真值（用于评估）
             "score_gt":    float(
                 df_anchors.loc[
@@ -662,11 +772,8 @@ def main() -> None:
         "dir_accuracy":    round(float(dir_correct), 4),
         "band_accuracy":   round(float(band_acc),    4),
     }
-    eval_path = out_path.with_suffix("").with_suffix("") / "score_eval.json" \
-        if out_path.suffix == ".parquet" \
-        else out_path.parent / "score_eval.json"
-    # 简单路径
-    eval_path = (REPO_ROOT / "train_set" / "score_eval.json").resolve()
+    eval_path = pathlib.Path(args.eval_output).resolve() \
+        if args.eval_output else (REPO_ROOT / "train_set" / "score_eval.json").resolve()
     eval_path.write_text(json.dumps(eval_report, indent=2, ensure_ascii=False))
 
     # ── 打印汇总 ──

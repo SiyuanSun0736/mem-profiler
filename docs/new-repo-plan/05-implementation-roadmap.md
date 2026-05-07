@@ -73,41 +73,33 @@
 .venv/bin/python scripts/build_anchor_set.py
 # → 290 条锚点，145 个程序（O0 全部可用）
 
-# Step 4: 模型训练（MLP）
-.venv/bin/python scripts/train_model.py
-# → [错误] 缺少 scikit-learn → pip install scikit-learn 后修复
-# → MLP 严重过拟合（162 维特征，~1200 训练对）
-# → train MAE=0.075 vs test MAE=2.73，线性基线 test R²=-56.83
-
-# Step 5: 模型训练（Transformer）
+# Step 4: 模型训练（Transformer）
 .venv/bin/python scripts/train_transformer.py
-# → [错误] 缺少 torch → pip install torch --index-url .../cpu 后修复
-# → 早停 epoch=96，val_loss=0.0907
-# → test MAE=0.5881，R²=0.5938，dir_acc=0.7828，acc_3cls=0.735
-# → O2-O3 pair 方向准确率仅 0.50（最难）
+# → 当前主线模型：PairTransformer
+# → test MAE=0.5863，R²=0.7926，dir_acc=0.8775，acc_3cls=0.7833
+# → O2-O3 pair `acc_3cls=0.4500`、`aux_tie_recall=0.5455`（最难）
 
-# Step 6: 评分推断
+# Step 5: 评分推断
 .venv/bin/python scripts/score_program.py --device cpu
-# → 717 条评分，Pearson r=0.8280（vs proxy），dir_acc=0.5667，band_acc=0.6909
+# → 默认使用 score-first tuned 参数
+# → 509 条评分，Pearson r=0.8996（vs proxy），dir_acc=0.7567，band_acc=0.8075
 
-# Step 7: 时间评分验证
+# Step 6: 时间评分验证
 .venv/bin/python scripts/build_time_score_table.py
 .venv/bin/python scripts/evaluate_score_vs_time.py
-# → 过滤 89 行（active_pid_count < 5），可靠行 612/701
-# → model vs score_time：Pearson r=0.4123，Spearman ρ=0.2065
-# → proxy vs score_time：Pearson r=0.4874，Spearman ρ=0.3062
+# → strict 主统计 294/374，过滤 80 行低 active_window_ratio
+# → model vs score_time：Pearson r=0.4321，Spearman ρ=0.5174
+# → proxy vs score_time：Pearson r=0.4658，Spearman ρ=0.5518
 ```
 
 **发现的问题：**
 
 | # | 问题 | 修复方式 |
 |---|------|----------|
-| 1 | `requirements.txt` 缺少 `scikit-learn` | 已追加 `scikit-learn>=1.3.0` |
-| 2 | `requirements.txt` 缺少 `torch` | 已追加 `torch>=2.0.0` |
-| 3 | MLP（162维输入）严重过拟合，test R²=-37.3 | 需正则化或降维，属 TODO 5/P1 |
-| 4 | O0 有重复采集（282条 vs 145条），`build_pair_table` 会重复计入 | 应在 M0 阶段先冻结 run list |
-| 5 | `score_time` 外部验证 Spearman ρ 仅 0.21，说明 wall_time proxy 与真实时间相关性弱 | 需独立 fixed-work timing 数据（TODO 2.5） |
-| 6 | `minor_fault_ratio` 全为零（方差零列）| 正常现象（测试集无 minor fault mix），已跳过标准化 |
+| 1 | O0/O1 的 variant-local tuned 结果不可靠：`O0 score_corr=NaN`，`O1 n_score_valid=0` | 已在 `score_program.py` 加可靠性回退，默认回退到 `ALL` |
+| 2 | 单程序评分与 proxy 真值已较稳，但 strict 时间外部验证仍只有中等相关 | 保留 `score-first` 默认，同时用 `--tuned-selection-objective time` 提供时间优先回放 |
+| 3 | O2/O3 仍是最难边界：`acc_3cls=0.4500`，tie 密度高 | 继续按 `current-data-quality-audit.md` 做 repeat timing / tie 阈值 / 时序特征分流 |
+| 4 | `minor_fault_ratio` 全为零（方差零列） | 已从 pair / anchor / model / score 输入中剔除 |
 
 ## 1. 当前最合适的项目结构
 
@@ -125,16 +117,16 @@ dataset-first-optimization-plan/
 │   ├── build_run_features.py
 │   ├── build_pair_table.py
 │   ├── build_anchor_set.py
-│   ├── train_model.py
 │   ├── train_transformer.py
+│   ├── tune_score_program_fine.py
 │   └── score_program.py
 ├── train_set/
 │   ├── run_features.parquet
 │   ├── pairs.parquet
 │   ├── anchor_set.parquet
-│   ├── model_eval.json
 │   ├── model_transformer_eval.json
-│   └── score_eval.json
+│   ├── score_eval.json
+│   └── score_time_eval.json
 └── results/
 ```
 
@@ -311,10 +303,9 @@ dataset-first-optimization-plan/
 1. `scripts/build_run_features.py`
 2. `scripts/build_pair_table.py`
 3. `scripts/build_anchor_set.py`
-4. `scripts/train_model.py`
-5. `scripts/train_transformer.py`
-6. `scripts/score_program.py`
-7. 新增一个共享特征配置模块，例如 `scripts/feature_columns.py`
+4. `scripts/train_transformer.py`
+5. `scripts/score_program.py`
+6. 新增一个共享特征配置模块，例如 `scripts/feature_columns.py`
 
 具体改动：
 
@@ -345,13 +336,12 @@ dataset-first-optimization-plan/
 
 1. 新增 `scripts/train_linear_baseline.py`
 2. 新增 `scripts/evaluate_models.py`
-3. `scripts/train_model.py`
-4. `scripts/train_transformer.py`
+3. `scripts/train_transformer.py`
 
 具体改动：
 
 1. 新增线性基线训练脚本，至少输出 Ridge / Logistic Regression 的 held-out 结果。
-2. 新增统一评估脚本，读取朴素基线、线性基线、MLP、Transformer 的结果文件。
+2. 新增统一评估脚本，读取朴素基线、线性基线、Transformer 的结果文件。
 3. 输出 `train_set/eval_summary.csv` 和 `train_set/eval_summary.md`。
 4. 把评估维度统一成：`MAE`、`RMSE`、`R²`、`dir_acc`、`acc_3cls`，并附带每个 split 的样本量。
 5. 单程序评分部分额外输出 `score_model` 对 `score_time` 的 `MAE`、Pearson/Spearman 相关、`band_accuracy_time`。
@@ -360,14 +350,13 @@ dataset-first-optimization-plan/
 
 ```bash
 .venv/bin/python scripts/train_linear_baseline.py
-.venv/bin/python scripts/train_model.py
 .venv/bin/python scripts/train_transformer.py --config fixed_work_transformer
 .venv/bin/python scripts/evaluate_models.py
 ```
 
 完成标准：
 
-1. 朴素基线、线性模型、MLP、Transformer 可以在一张表中直接比较。
+1. 朴素基线、线性模型、Transformer 可以在一张表中直接比较。
 2. 不再需要手工打开多个 json 文件拼结论。
 3. 单程序评分既能看 proxy 结果，也能看时间评分验证结果。
 4. 文档里的模型结论可以直接引用 `eval_summary.md`。
@@ -413,8 +402,7 @@ dataset-first-optimization-plan/
 
 1. 新增 `scripts/analyze_hard_pairs.py`
 2. `train_set/pairs.parquet`
-3. `train_set/model_eval.json`
-4. `train_set/model_transformer_eval.json`
+3. `train_set/model_transformer_eval.json`
 
 具体改动：
 

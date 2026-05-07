@@ -44,6 +44,7 @@ ebpf-mem-profiler/
 │   └── to_baseline.py          # 格式转换适配器
 ├── scripts/
 │   ├── freeze_curated_manifest.py # 冻结 145x4 curated run list
+│   ├── audit_train_set_quality.py # 生成当前数据质量审计与问题样本清单
 │   ├── build_run_features.py   # 原始窗口 → 运行级特征
 │   ├── build_pair_table.py     # 运行级特征 → pair 数据
 │   └── build_anchor_set.py     # pair 结果 → 锚点集
@@ -69,11 +70,11 @@ ebpf-mem-profiler/
 
 当前仓库里和 llvm-test-suite 相关的数据，需要明确区分 raw 采集层和训练快照层。
 
-1. 最新 raw manifests 位于 `data/llvm_test_suite/manifest_bcc_O0~O3.jsonl`，它们不等同于现有 `train_set` 使用的冻结快照。
-2. 当前 raw snapshot 的记录数是 `O0=283`、`O1=145`、`O2=145`、`O3=145`；其中 `O0` 含重复采集记录，并且至少有 1 条 manifest 指向缺失输出目录。
-3. 为了把最新 raw data 冻结成可复现的 `145 x 4` run list，仓库现在提供 `manifest_curated_O0~O3.jsonl`。它们的选择规则是：对每个 `program x variant` 只保留“时间戳最新且目录完整”的 run。
+1. 最新 raw manifests 位于 `data/llvm_test_suite/manifest_bcc_O0~O3.jsonl`，curated manifests 位于 `data/llvm_test_suite/manifest_curated_O0~O3.jsonl`。
+2. 当前 raw 与 curated 两层都已经收敛为严格的 `145 x 4`：四个 variant 各 145 条记录，`shared_program_count=145`。
+3. 当前 `train_set` 不是“另一轮更早的冻结快照”，而是从这轮 curated manifests 继续经过下游过滤得到的训练子集：`580 curated runs -> 509 run_features -> 1494 pairs -> 374 anchors`。
 4. 如果要从最新 raw data 重建运行级特征，应优先使用 curated manifests，而不是直接顺序扫描 raw manifests。
-5. 现有 `train_set` 和模型评估结果仍然来自更早一轮冻结快照；这一点与 [docs/new-repo-plan/README.md](docs/new-repo-plan/README.md) 保持一致。
+5. 当前完整的问题样本清单、缺失变体程序和 O2/O3 难例分流建议，统一由 `python scripts/audit_train_set_quality.py` 生成，产物为 `train_set/data_quality_audit.json` 与 [docs/new-repo-plan/current-data-quality-audit.md](docs/new-repo-plan/current-data-quality-audit.md)。
 
 ---
 

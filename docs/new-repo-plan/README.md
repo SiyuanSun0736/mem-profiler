@@ -22,6 +22,8 @@
 5. [05-implementation-roadmap.md](05-implementation-roadmap.md)：按现有脚本和产物重排里程碑与下一步任务。
 6. [06-collection-to-transformer-workflow.md](06-collection-to-transformer-workflow.md)：从采集数据到 PairTransformer 训练、单程序评分与可选评分层 fine tune 的具体执行流程与流程图。
 7. [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)：当前数据问题、最值得做的优化和优先级。
+8. [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md)：score-first 与 time-first 两套默认口径的并排对比表与默认建议。
+9. [current-data-quality-audit.md](current-data-quality-audit.md)：当前数据快照、完整问题样本清单和 O2/O3 难例分流建议。
 
 ## 推荐阅读顺序
 
@@ -31,7 +33,9 @@
 
 如果你的目标是按命令一步步从采集跑到 Transformer 训练，直接读 [06-collection-to-transformer-workflow.md](06-collection-to-transformer-workflow.md)。
 
-如果你的目标是先判断这批数据最主要的问题在哪、下一步优先改什么，直接读 [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)。
+如果你的目标是先判断这批数据最主要的问题在哪、下一步优先改什么，先读 [current-data-quality-audit.md](current-data-quality-audit.md)，再读 [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)。
+
+如果你的目标是确定 `score_program.py` 默认该走 score-first 还是 time-first，先读 [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md)。
 
 如果你的目标是判断当前模型路线是否合理，再读 [04-model-plan.md](04-model-plan.md)。
 
@@ -42,8 +46,8 @@
 1. 原始数据根目录来自 `data/llvm_test_suite/bcc/O0~O3`，不是专门构造的布局基准。
 2. 当前 `manifest_bcc_O0~O3.jsonl` 已经收敛为严格的 `145 x 4`：四个 variant 各有 145 条记录，采集脚本会在收尾阶段自动去重并重建 manifest。
 3. 当前每次 raw run 至少包含 `run_metadata.jsonl` 与 `window_metrics.jsonl`；`run_metadata.jsonl` 已记录 `enabled_probes`、`host_info`、`aggregation_scope` 和 `collection_backend=hybrid_perf_event_open_bcc`。
-4. 当前 train_set 对应的是一个冻结训练快照：145 个程序、580 条运行记录、1740 条 pair、290 条锚点。这才是现有模型结果的真实数据口径。
-5. 这个训练快照不等同于最新 raw 目录：`run_features.csv` 里保存的 `output_dir` 指向更早一轮采集路径，因此“最新 raw data”和“当前训练产物”必须分开叙述。
+4. 当前模型结果对应的真实口径是“最新 curated manifests 经过语义过滤后的训练子集”：`509 runs、1494 pairs、374 anchors`，而不是未过滤的 `145 x 4` 全量账本。
+5. 当前 `run_features.csv` 中保留的 `output_dir` 全部来自现有 curated manifests；raw/curated 账本和训练产物的区别，主要来自下游过滤而不是“更早一轮目录”。完整清单见 [current-data-quality-audit.md](current-data-quality-audit.md)。
 6. 当前没有 repeat 维度，没有多机维度，也没有 AoS/SoA/blocking 这类布局 family。
 
 ## 现阶段最合理的闭环
@@ -63,10 +67,10 @@
 
 下面这些指标全部基于当前冻结的 train_set 快照，而不是直接由最新 raw manifest 即时重算。
 
-1. `pairs.parquet` 覆盖 1740 条 pair，145 个程序，标签分布相对均衡。
-2. Phase 1 MLP 在测试集上的方向准确率为 0.8125，三分类准确率为 0.6667。
-3. PairTransformer 在测试集上的方向准确率提升到 0.9010，三分类准确率提升到 0.8030。
-4. 单程序评分已经能工作，但稳定性只是中等：`corr_score_log=0.5546`，`band_accuracy=0.6069`。
+1. 当前 `pairs.parquet` 覆盖 1494 条 pair、129 个程序；标签分布仍然基本均衡，但 tie 只占 208 条。
+2. 当前主模型 PairTransformer 在测试集上的结果是：`dir_acc = 0.8775`、`acc_3cls = 0.7833`、`r2 = 0.7926`。
+3. 当前最难的边界不是 O0 对高优化级别，而是 `O2-O3`：`acc_3cls = 0.4500`、`aux_tie_recall = 0.5455`，且全量 tie rate 达到 `0.4524`。
+4. 单程序评分已经能工作：默认 score-first tuned 参数下，`corr_score_log = 0.8996`、`mae_score_log = 0.3174`、`band_accuracy = 0.8075`；但 strict 时间外部验证仍只有 `corr_model_time = 0.4321`，所以时间真值仍是短板。
 
 ## 这版方案主动放弃什么
 

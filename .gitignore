@@ -31,3 +31,7 @@ Thumbs.db
 
 # 编译数据库
 compile_commands.json
+
+# latex
+/ElegantNote
+/spie-proceedings-style

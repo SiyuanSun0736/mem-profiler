@@ -2,6 +2,8 @@
 
 > 这份文档回答两个问题：当前这批数据最主要的问题是什么，以及下一步最值得做的优化是什么。
 
+完整问题样本清单、缺失 strict baseline 的 run，以及 O2/O3 难例分流建议，见 [current-data-quality-audit.md](current-data-quality-audit.md)。
+
 ## 1. 结论先行
 
 当前最该优先做的不是继续加模型，而是先做语义过滤。
@@ -30,15 +32,17 @@
 
 这说明问题不是集中在单一 variant，而是四个 variant 都有一批 run 实际上没有形成足够稳定的 fixed-work 语义。
 
+完整 71 条 run 名单见 [current-data-quality-audit.md](current-data-quality-audit.md) 和 [train_set/data_quality_audit.json](../../train_set/data_quality_audit.json)。
+
 ### 2.2 代理标签和真实时间仍然不够一致
 
 过滤后重新计算的外部时间验证在 [train_set/score_time_eval.json](../../train_set/score_time_eval.json)：
 
-1. loose 对照下，proxy vs `score_time`: Pearson r = 0.3510，Spearman ρ = 0.3626。
-2. loose 对照下，model vs `score_time`: Pearson r = 0.3671，Spearman ρ = 0.3431。
-3. strict 时间真值下，proxy vs `score_time`: Pearson r = 0.5025，Spearman ρ = 0.6739。
-4. strict 时间真值下，model vs `score_time`: Pearson r = 0.5312，Spearman ρ = 0.6026。
-5. strict 过滤从 loose 的 250 行里剔除了 51 行，全部来自 `low_active_window_ratio`。
+1. 未做 strict 过滤时，proxy vs `score_time`: Pearson r = 0.2993，Spearman ρ = 0.2756。
+2. 未做 strict 过滤时，model vs `score_time`: Pearson r = 0.2810，Spearman ρ = 0.2726。
+3. strict 时间真值下，proxy vs `score_time`: Pearson r = 0.4658，Spearman ρ = 0.5518。
+4. strict 时间真值下，model vs `score_time`: Pearson r = 0.4337，Spearman ρ = 0.5192。
+5. strict 过滤从 loose 的 374 行里剔除了 80 行，全部来自 `low_active_window_ratio`；另外还有 10 条 run 因缺 strict O0 baseline 无法进入 strict 对照。
 
 这说明时间真值过滤本身非常重要：只要把低活跃窗口占比的 run 排除掉，外部一致性会明显改善。但即便在 strict 口径下，当前 `cycles_per_iter` 和模型分数与真实时间也还只是中等相关，不是强时间监督。
 
@@ -46,8 +50,9 @@
 
 过滤后重训的结果在 [train_set/model_transformer_eval.json](../../train_set/model_transformer_eval.json)：
 
-1. 整体 test: R² = 0.8060，`dir_acc = 0.8725`，`acc_3cls = 0.7542`。
-2. 但 `O2-O3` 仍然最难：`dir_acc = 0.6667`，`acc_3cls = 0.35`，R² 仍为负。
+1. 整体 test: `R² = 0.7926`，`dir_acc = 0.8775`，`acc_3cls = 0.7833`。
+2. 但 `O2-O3` 仍然最难：`R² = -0.4327`，`acc_3cls = 0.4500`，`aux_tie_recall = 0.5455`。
+3. 从全量 pair 分布看，`O2-O3` 的 tie rate 已达 `0.4524`，中位 `|log_ratio|` 只有 `0.0587`，说明这里本来就是近似平局最密集的区间。
 
 这说明清掉坏样本以后，主问题不再是“全局训练不稳”，而是“相近优化级别之间的差异本来就很小，且 tie 密集”。
 
@@ -57,7 +62,8 @@
 
 1. [train_set/run_features.parquet](../../train_set/run_features.parquet): 509 runs。
 2. [train_set/pairs.parquet](../../train_set/pairs.parquet): 1494 pairs，129 个程序。
-3. [train_set/anchor_set.parquet](../../train_set/anchor_set.parquet): 250 anchors，128 个拥有 O0 基线的程序。
+3. [train_set/anchor_set.parquet](../../train_set/anchor_set.parquet): 374 anchors，128 个拥有 O0 基线的程序。
+4. 过滤后的 run_features 实际只保留了 122 个完整四变体程序，另有 10 个程序缺至少一个 variant。
 
 这说明过滤是必要的，但也带来了新的现实：当前可用于稳定建模的数据比“145 x 4”想象中更少。
 
@@ -79,10 +85,10 @@
 
 这一步带来的直接收益是：
 
-1. Transformer test R² 从之前的 0.5869 提升到 0.8060。
-2. Transformer test `dir_acc` 从 0.7929 提升到 0.8725。
-3. 单程序评分 Pearson r 从 0.8567 提升到 0.9160。
-4. 单程序评分方向准确率从 0.5966 提升到 0.7320。
+1. 当前语义过滤后的 Transformer test 结果已经稳定在 `R² = 0.7926`、`dir_acc = 0.8775`、`acc_3cls = 0.7833`。
+2. 当前单程序评分结果已经稳定在 `corr_score_log = 0.8985`、`band_accuracy = 0.8075`。
+3. 但 strict 时间外部验证仍只有 `corr_model_time = 0.4337`，说明“坏 run 已清掉”并不等于“时间真值已经够强”。
+4. 所以 P1 解决的是训练链路污染，不是时间监督不足；后者仍要靠 P2 单独补。
 
 所以当前最强结论不是“模型该换”，而是“坏 run 会显著拖坏整个链路”。
 
@@ -119,22 +125,22 @@
 3. `O2-O3` 上，回归主头 `acc_3cls = 0.450`，辅助分类头 `aux_acc_3cls = 0.600`。
 4. `O1-O2` / `O1-O3` 上，辅助分类头也继续高于回归主头。
 
-本轮完整 fine tune 后，当前 tuned defaults 在 [train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json)：
+本轮完整 fine tune 后，[train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json) 现在会同时输出两套最优结果：
 
-1. `ALL` 的最优组合是 `gate=0.50`、`shrink=0.75`、`alpha=0.50`。
-2. `O2` 的最优组合是 `gate=0.60`、`shrink=1.25`、`alpha=0.50`。
-3. `O3` 的最优组合是 `gate=0.55`、`shrink=1.25`、`alpha=0.50`。
-4. `O0` / `O1` 的局部最优目前并不可靠：`O0` 的相关性是 `NaN`，`O1` 的 `score_corr` 缺失且 `time_corr` 为负，因此这两组结果只能视为弱信号，不能和 `O2` / `O3` 同等看待。
+1. `best_by_variant`：time-first 排序，优先看 strict 时间相关性。
+2. `best_for_score_by_variant`：score-first 排序，优先看单程序评分对 proxy 真值的相关性与 MAE。
+3. `O0` / `O1` 的 variant-local tuned 结果目前仍不可靠：`O0 score_corr=NaN`，`O1 n_score_valid=0` 且 `time_corr` 为负。
+4. [scripts/score_program.py](../../scripts/score_program.py) 已增加 tuned 可靠性回退：当局部 tuned 指标不可靠时，自动回退到 `ALL`；默认再优先使用 score-first 的 tuned 结果，若更看重时间外部验证，可显式传 `--tuned-selection-objective time`。
 
 把这份 tuned JSON 回放到默认评分路径后，最新整体结果在 [train_set/score_eval.json](../../train_set/score_eval.json) 和 [train_set/score_time_eval.json](../../train_set/score_time_eval.json)：
 
-1. 单程序评分：`mae_score_log = 0.3204`，`corr_score_log = 0.8985`，`band_accuracy = 0.8075`。
-2. strict 时间外部验证：`mae_model_time = 0.9993`，`corr_model_time = 0.4337`，`spearman_model = 0.5192`，`band_acc_model = 0.6837`。
-3. 相比上一版统一默认值，proxy 口径略有回落，但真实时间口径继续小幅改善。
+1. 默认 score-first 单程序评分：`mae_score_log = 0.3174`，`corr_score_log = 0.8996`，`band_accuracy = 0.8075`。
+2. strict 时间外部验证：`mae_model_time = 1.0031`，`corr_model_time = 0.4321`，`spearman_model = 0.5174`，`band_acc_model = 0.6769`。
+3. 相比之前的 time-first 默认值，proxy 口径小幅提升，而 strict 时间口径基本持平略降；因此当前更合理的默认策略是“评分优先默认 + 时间优先可切换”。
 
 所以当前更准确的判断不是“P3 已经完成”，而是：
 
-P3 的方向是对的，而且已经从“训练端 tie-aware + 下游 gating”推进到了“评分层按 variant 精调并回放默认值”。但它还没有完全收敛：`O2` / `O3` 的 tuned best 已经有稳定信号，`O0` / `O1` 的 tuned local optimum 仍然口径不足，下一步更合理的是给 [scripts/score_program.py](../../scripts/score_program.py) 再加一道可靠性回退，当某个 variant 的 tuned 指标为 `NaN` 或样本口径不足时自动回退到 `ALL`，而不是无条件采用 local best。
+P3 的方向是对的，而且已经从“训练端 tie-aware + 下游 gating”推进到了“评分层按 variant 精调 + 可靠性回退 + score/time 双目标回放默认值”。但它还没有完全收敛：`O2` / `O3` 的 tuned best 已经有稳定信号，`O0` / `O1` 仍然只能依赖 `ALL` 回退；下一步更合理的是继续补 O2/O3 的 near-tie 数据和 fixed-work timing，而不是继续硬调 O0/O1 的局部最优。
 
 ### P4. 改锚点策略，而不是只用 O0/O3 平均
 
@@ -154,15 +160,15 @@ P3 的方向是对的，而且已经从“训练端 tie-aware + 下游 gating”
 这一步带来的直接结果在 [train_set/score_eval.json](../../train_set/score_eval.json)：
 
 1. `n_with_gt = 374`，覆盖面明显高于只用 O0/O3 时的 250。
-2. `mae_score_log = 0.3165`。
-3. `corr_score_log = 0.8999`。
+2. `mae_score_log = 0.3174`。
+3. `corr_score_log = 0.8996`。
 4. `band_accuracy = 0.8075`。
 
 所以 P4 的判断已经可以更明确一些：
 
 只用 O0/O3 平均确实过于脆弱；把 O2 拉进来，并且按质量和离群情况做加权，是比简单平均更稳的默认策略。
 
-后续即使继续做 P3 的 per-variant fine tune，P4 这层 O0/O2/O3 加权锚点仍然是当前单程序评分能够成立的底座；最新 replay 后的整体 `score_eval` 已经变成 `corr_score_log = 0.8985`、`mae_score_log = 0.3204`，但这一变化更主要来自 P3 评分层精调，而不是推翻了 P4 的锚点策略。
+后续即使继续做 P3 的 per-variant fine tune，P4 这层 O0/O2/O3 加权锚点仍然是当前单程序评分能够成立的底座；最新 replay 后的整体 `score_eval` 已经变成 `corr_score_log = 0.8996`、`mae_score_log = 0.3174`，但这一变化更主要来自 P3 评分层调参与回退策略，而不是推翻了 P4 的锚点策略。
 
 ### P5. 清理死特征并引入样本质量权重
 

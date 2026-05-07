@@ -14,10 +14,15 @@ tune_score_program_fine.py — score_program 评分层精调（variant 分开调
 2. 以 `time_spearman`、`score_corr`、`time_mae` 作为 tie-break。
 3. 每个 variant 单独选最优参数，不做全局共用。
 
+同时额外输出一套 score-first 的最优参数，供 score_program 在“单程序评分优先”场景默认使用。
+
 输出
 ----
   train_set/score_tune_fine_variant_trials.csv
   train_set/score_tune_fine_variant_best.json
+
+其中 `best_by_variant` 保留 time-first 结果，`best_for_score_by_variant`
+保留 score-first 结果，供 `score_program.py` 默认优先使用。
 
 用法
 ----
@@ -403,6 +408,16 @@ def trial_sort_key(row: dict[str, Any]) -> tuple[float, float, float, float, flo
     )
 
 
+def score_first_trial_sort_key(row: dict[str, Any]) -> tuple[float, float, float, float, float]:
+    return (
+        _metric_desc(float(row.get("score_corr", float("nan")))),
+        -_metric_asc(float(row.get("score_mae", float("nan")))),
+        _metric_desc(float(row.get("time_corr", float("nan")))),
+        _metric_desc(float(row.get("time_spearman", float("nan")))),
+        -_metric_asc(float(row.get("time_mae", float("nan")))),
+    )
+
+
 def main() -> None:
     args = parse_args()
 
@@ -486,6 +501,7 @@ def main() -> None:
         "n_combos": len(combos),
         "grid": grid,
         "best_by_variant": {},
+        "best_for_score_by_variant": {},
     }
     for variant in ["ALL", *variants]:
         subset = trials_df[trials_df["variant"] == variant].copy()
@@ -494,6 +510,12 @@ def main() -> None:
         summary["best_by_variant"][variant] = {
             "best": rows[0] if rows else None,
             "top_trials": rows[: max(args.top_k, 1)],
+        }
+        score_rows = subset.to_dict(orient="records")
+        score_rows.sort(key=score_first_trial_sort_key, reverse=True)
+        summary["best_for_score_by_variant"][variant] = {
+            "best": score_rows[0] if score_rows else None,
+            "top_trials": score_rows[: max(args.top_k, 1)],
         }
 
     best_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
