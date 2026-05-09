@@ -39,9 +39,9 @@
 过滤后重新计算的外部时间验证在 [train_set/score_time_eval.json](../../train_set/score_time_eval.json)：
 
 1. 未做 strict 过滤时，proxy vs `score_time`: Pearson r = 0.2993，Spearman ρ = 0.2756。
-2. 未做 strict 过滤时，model vs `score_time`: Pearson r = 0.2810，Spearman ρ = 0.2726。
+2. 未做 strict 过滤时，model vs `score_time`: Pearson r = 0.2799，Spearman ρ = 0.2701。
 3. strict 时间真值下，proxy vs `score_time`: Pearson r = 0.4658，Spearman ρ = 0.5518。
-4. strict 时间真值下，model vs `score_time`: Pearson r = 0.4337，Spearman ρ = 0.5192。
+4. strict 时间真值下，model vs `score_time`: Pearson r = 0.4325，Spearman ρ = 0.5181。
 5. strict 过滤从 loose 的 374 行里剔除了 80 行，全部来自 `low_active_window_ratio`；另外还有 10 条 run 因缺 strict O0 baseline 无法进入 strict 对照。
 
 这说明时间真值过滤本身非常重要：只要把低活跃窗口占比的 run 排除掉，外部一致性会明显改善。但即便在 strict 口径下，当前 `cycles_per_iter` 和模型分数与真实时间也还只是中等相关，不是强时间监督。
@@ -71,132 +71,155 @@
 
 本轮特征构建仍然报告零方差列 `minor_fault_ratio`。这一列现在仍保留在 [train_set/run_features.parquet](../../train_set/run_features.parquet) 和 [train_set/run_features_zscore.parquet](../../train_set/run_features_zscore.parquet) 中用于账本和兼容性，但已经从 pair / anchor / model / score 的实际输入列里剔除，不再参与训练和推理。
 
-## 3. 最值得做的优化
+## 3. 已完成的优化
 
-### P1. 语义过滤，不是加模型
+### 3.1 已完成：P1 语义过滤
 
-这是当前第一优先级，且本轮已经实施。
-
-过滤规则默认接在 [scripts/build_run_features.py](../../scripts/build_run_features.py) 中：
+这一项已经落在 [scripts/build_run_features.py](../../scripts/build_run_features.py) 并成为默认行为：
 
 1. `active_pid_count < 5` 的 run 直接剔除。
 2. `cycles_per_iter <= 0` 的 run 直接剔除。
 3. 过滤摘要写入 [train_set/run_feature_filter_summary.json](../../train_set/run_feature_filter_summary.json)。
 
-这一步带来的直接收益是：
+当前收益已经比较稳定：
 
-1. 当前语义过滤后的 Transformer test 结果已经稳定在 `R² = 0.7926`、`dir_acc = 0.8775`、`acc_3cls = 0.7833`。
-2. 当前单程序评分结果已经稳定在 `corr_score_log = 0.8985`、`band_accuracy = 0.8075`。
-3. 但 strict 时间外部验证仍只有 `corr_model_time = 0.4337`，说明“坏 run 已清掉”并不等于“时间真值已经够强”。
-4. 所以 P1 解决的是训练链路污染，不是时间监督不足；后者仍要靠 P2 单独补。
+1. Transformer test 结果稳定在 `R² = 0.7926`、`dir_acc = 0.8775`、`acc_3cls = 0.7833`。
+2. 单程序评分结果稳定在 `corr_score_log = 0.9005`、`band_accuracy = 0.8075`。
+3. 当前已经可以明确判断：坏 run 会直接污染训练和评分链路，先做语义过滤是对的。
 
-所以当前最强结论不是“模型该换”，而是“坏 run 会显著拖坏整个链路”。
+所以 P1 在“把坏样本挡在训练链路外”这个目标上已经完成；它不再是当前主变量，除非后续数据采集口径发生变化。
 
-### P2. 补真实时间口径，而不是继续完全依赖 proxy
+### 3.2 已完成：P2 第一阶段，strict 时间口径已经接上
 
-这一项本轮已经先完成了第一步：
+这一项已经完成第一阶段落地，位置在 [scripts/build_time_score_table.py](../../scripts/build_time_score_table.py) 和 [scripts/evaluate_score_vs_time.py](../../scripts/evaluate_score_vs_time.py)：
 
-1. 在 [scripts/build_time_score_table.py](../../scripts/build_time_score_table.py) 里加入 strict 时间真值过滤。
-2. 默认要求 `active_window_ratio >= 0.10`，并输出 [train_set/time_score_filter_summary.json](../../train_set/time_score_filter_summary.json)。
-3. 在 [scripts/evaluate_score_vs_time.py](../../scripts/evaluate_score_vs_time.py) 里同时保留 strict 主统计和 loose 对照统计。
+1. strict 时间真值过滤已接入 `active_window_ratio >= 0.10`。
+2. 过滤摘要会写入 [train_set/time_score_filter_summary.json](../../train_set/time_score_filter_summary.json)。
+3. 评估同时保留 strict 主统计和 loose 对照统计。
 
-但第二优先级还没有做完，下一步仍然应该是时间真值增强：
+当前这一步已经证明了“时间真值过滤本身有价值”：
 
-1. 对关键程序补 fixed-work repeat timing。
-2. 用中位数 wall time 构建更稳的 `score_time`。
-3. 用它做更严格的外部验证，而不是只看 proxy 内部相关性。
+1. strict 口径下，proxy vs `score_time` 提升到 Pearson `0.4658`、Spearman `0.5518`。
+2. strict 口径下，model vs `score_time` 提升到 Pearson `0.4325`、Spearman `0.5181`。
 
-### P3. 对接近 tie 的 pair 做专门处理
+也就是说，P2 的第一阶段已经完成，结论是成立的：先把低活跃窗口占比的 run 排除掉，外部一致性会明显改善。
 
-这一项现在已经推进到第三步，落点同时在 [scripts/train_transformer.py](../../scripts/train_transformer.py)、[scripts/score_program.py](../../scripts/score_program.py) 和 [scripts/tune_score_program_fine.py](../../scripts/tune_score_program_fine.py)：
+### 3.3 已完成：P3 当前阶段，tie-aware 训练与评分层默认值回退
 
-1. 对 `|log_ratio|` 做三档分桶：`tie`、`near_tie`、`far`。
-2. 对回归头引入 tie-aware weighting：默认 `tie=0.35`、`near_tie=0.65`、`far=1.0`。
-3. 将原来的“单头回归 + 可选方向 BCE”改成“回归头 + 3 类辅助头（i_better / tie / j_better）”。
-4. 在单程序评分阶段，不再直接使用回归头裸输出，而是让辅助分类头参与近 tie 解码和 gating：高 `p_tie` 的 pair 会被压缩到接近 0，非 tie pair 的方向也由辅助头参与约束。
-5. 在锚点聚合阶段，又新增了 `tie_margin_weight_alpha`：非 tie pair 的投票权重不再只看分类置信度，而是混入 direction margin，专门下调“近 tie 但仍被判成 directional”的 pair。
-6. 现在还新增了 [scripts/tune_score_program_fine.py](../../scripts/tune_score_program_fine.py)，可以在不重训模型的前提下缓存 query-anchor 预测，并按 query variant 分开精调 `gate / shrink / alpha`。
-7. [scripts/score_program.py](../../scripts/score_program.py) 现在会默认读取 [train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json)，按 `CLI 显式传参 > 当前 variant tuned best > ALL tuned best > 代码硬编码默认值` 的优先级生效。
+这一项当前已经不是“只有想法”，而是已经完成了一个可工作的阶段版本，落点在 [scripts/train_transformer.py](../../scripts/train_transformer.py)、[scripts/score_program.py](../../scripts/score_program.py) 和 [scripts/tune_score_program_fine.py](../../scripts/tune_score_program_fine.py)：
 
-当前这版模型的结果在 [train_set/model_transformer_eval.json](../../train_set/model_transformer_eval.json)：
+1. `|log_ratio|` 已分成 `tie`、`near_tie`、`far` 三档。
+2. 回归头已接入 tie-aware weighting。
+3. 模型已从“单头回归 + 可选方向 BCE”推进到“回归头 + 3 类辅助头（i_better / tie / j_better）”。
+4. 单程序评分阶段已接入辅助分类头 gating。
+5. 锚点投票阶段已接入 `tie_margin_weight_alpha`，下调近 tie directional pair 的影响。
+6. [scripts/tune_score_program_fine.py](../../scripts/tune_score_program_fine.py) 已能按 query variant 精调 `gate / shrink / alpha / min_anchor_quality / outlier`。
+7. [scripts/score_program.py](../../scripts/score_program.py) 已实现 tuned 可靠性回退：`CLI 显式传参 > 当前 variant tuned best > ALL tuned best > 代码硬编码默认值`。
 
-1. test 集回归主头：`dir_acc = 0.8775`，`acc_3cls = 0.7833`。
-2. test 集辅助分类头：`aux_acc_3cls = 0.8292`，`aux_tie_recall = 0.5833`。
-3. `O2-O3` 上，回归主头 `acc_3cls = 0.450`，辅助分类头 `aux_acc_3cls = 0.600`。
-4. `O1-O2` / `O1-O3` 上，辅助分类头也继续高于回归主头。
+当前产物已经说明这一阶段确实跑通：
 
-本轮完整 fine tune 后，[train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json) 现在会同时输出两套最优结果：
+1. [train_set/model_transformer_eval.json](../../train_set/model_transformer_eval.json) 中，test 集主头 `dir_acc = 0.8775`、`acc_3cls = 0.7833`，辅助头 `aux_acc_3cls = 0.8292`。
+2. `O2-O3` 上，辅助分类头 `aux_acc_3cls = 0.600`，高于回归主头 `0.450`。
+3. [train_set/score_eval.json](../../train_set/score_eval.json) 中，默认 score-first 结果为 `mae_score_log = 0.3160`、`corr_score_log = 0.9005`、`band_accuracy = 0.8075`。
+4. [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md) 已确认当前默认建议口径为 score-first，time-first 作为可切换选项保留。
 
-1. `best_by_variant`：time-first 排序，优先看 strict 时间相关性。
-2. `best_for_score_by_variant`：score-first 排序，优先看单程序评分对 proxy 真值的相关性与 MAE。
-3. `O0` / `O1` 的 variant-local tuned 结果目前仍不可靠：`O0 score_corr=NaN`，`O1 n_score_valid=0` 且 `time_corr` 为负。
-4. [scripts/score_program.py](../../scripts/score_program.py) 已增加 tuned 可靠性回退：当局部 tuned 指标不可靠时，自动回退到 `ALL`；默认再优先使用 score-first 的 tuned 结果，若更看重时间外部验证，可显式传 `--tuned-selection-objective time`。
+所以 P3 当前应当视为“阶段性完成”：训练端 tie-aware、评分层 gating、variant-local tuned 和可靠性回退都已经落地。
 
-把这份 tuned JSON 回放到默认评分路径后，最新整体结果在 [train_set/score_eval.json](../../train_set/score_eval.json) 和 [train_set/score_time_eval.json](../../train_set/score_time_eval.json)：
+### 3.4 已完成：P4 O0/O2/O3 加权锚点底座
 
-1. 默认 score-first 单程序评分：`mae_score_log = 0.3174`，`corr_score_log = 0.8996`，`band_accuracy = 0.8075`。
-2. strict 时间外部验证：`mae_model_time = 1.0031`，`corr_model_time = 0.4321`，`spearman_model = 0.5174`，`band_acc_model = 0.6769`。
-3. 相比之前的 time-first 默认值，proxy 口径小幅提升，而 strict 时间口径基本持平略降；因此当前更合理的默认策略是“评分优先默认 + 时间优先可切换”。
+这一项已经完成首版实现，落点在 [scripts/build_anchor_set.py](../../scripts/build_anchor_set.py) 和 [scripts/score_program.py](../../scripts/score_program.py)：
 
-所以当前更准确的判断不是“P3 已经完成”，而是：
+1. 默认锚点已从 `O0/O3` 改成 `O0/O2/O3`。
+2. anchor set 已加入 `active_window_ratio` 和 `anchor_quality`。
+3. 单程序评分已从简单平均改成“质量权重 × variant 距离权重 × 分类置信度”的加权聚合。
+4. 同一程序的多个 anchor estimate 已接入中位数离群过滤。
 
-P3 的方向是对的，而且已经从“训练端 tie-aware + 下游 gating”推进到了“评分层按 variant 精调 + 可靠性回退 + score/time 双目标回放默认值”。但它还没有完全收敛：`O2` / `O3` 的 tuned best 已经有稳定信号，`O0` / `O1` 仍然只能依赖 `ALL` 回退；下一步更合理的是继续补 O2/O3 的 near-tie 数据和 fixed-work timing，而不是继续硬调 O0/O1 的局部最优。
-
-### P4. 改锚点策略，而不是只用 O0/O3 平均
-
-这一项本轮已经做了首版实现，落点在 [scripts/build_anchor_set.py](../../scripts/build_anchor_set.py) 和 [scripts/score_program.py](../../scripts/score_program.py)：
-
-1. 默认锚点从 `O0/O3` 改成 `O0/O2/O3`。
-2. 在 anchor set 中加入 `active_window_ratio` 和 `anchor_quality`，用于质量加权。
-3. 单程序评分从简单平均改成“质量权重 × variant 距离权重 × 分类置信度”的加权聚合。
-4. 对同一程序的多个 anchor estimate 做中位数离群过滤，明显偏离的 anchor 不参与最终聚合。
-
-当前锚点统计在 [train_set/anchor_set.stats.json](../../train_set/anchor_set.stats.json)：
+当前统计在 [train_set/anchor_set.stats.json](../../train_set/anchor_set.stats.json)：
 
 1. 锚点总数从 250 增加到 374。
 2. 当前锚点集合为 O0=128、O2=124、O3=122。
 3. `anchor_quality_mean = 0.5043`。
 
-这一步带来的直接结果在 [train_set/score_eval.json](../../train_set/score_eval.json)：
+对应评分结果在 [train_set/score_eval.json](../../train_set/score_eval.json)：
 
 1. `n_with_gt = 374`，覆盖面明显高于只用 O0/O3 时的 250。
-2. `mae_score_log = 0.3174`。
-3. `corr_score_log = 0.8996`。
+2. `mae_score_log = 0.3160`。
+3. `corr_score_log = 0.9005`。
 4. `band_accuracy = 0.8075`。
 
-所以 P4 的判断已经可以更明确一些：
+所以 P4 当前也应视为已完成的基础设施，而不是待验证想法。后续即使继续推进 P3，P4 这层 O0/O2/O3 加权锚点仍然是当前单程序评分成立的底座。
 
-只用 O0/O3 平均确实过于脆弱；把 O2 拉进来，并且按质量和离群情况做加权，是比简单平均更稳的默认策略。
+### 3.5 已完成：P5 第一阶段，死特征清理已经接上
 
-后续即使继续做 P3 的 per-variant fine tune，P4 这层 O0/O2/O3 加权锚点仍然是当前单程序评分能够成立的底座；最新 replay 后的整体 `score_eval` 已经变成 `corr_score_log = 0.8996`、`mae_score_log = 0.3174`，但这一变化更主要来自 P3 评分层调参与回退策略，而不是推翻了 P4 的锚点策略。
-
-### P5. 清理死特征并引入样本质量权重
-
-这一项本轮已经做完第一步：
+这一项的第一阶段已经完成：
 
 1. 新增 [scripts/feature_columns.py](../../scripts/feature_columns.py) 作为共享输入特征列表。
-2. `minor_fault_ratio` 由于在当前快照里 `std = 0`，已经从 pair / anchor / model / score 的输入列里统一剔除。
-3. [train_set/pairs_stats.json](../../train_set/pairs_stats.json) 现在显示 `feature_dim = 53`、`input_dim = 159`，说明输入维度已经同步收缩。
+2. `minor_fault_ratio` 已从 pair / anchor / model / score 的实际输入列里统一剔除。
+3. [train_set/pairs_stats.json](../../train_set/pairs_stats.json) 当前显示 `feature_dim = 53`、`input_dim = 159`。
 
-这一项还没有做完的部分是：
+所以 P5 的“先清掉已知死特征”这一层已经做完，当前不需要再把它表述成待开始事项。
 
-1. 更系统地识别“长期弱信号特征”，而不只处理当前已知的零方差列。
+## 4. 尚未完成的优化
+
+### 4.1 未完成：P2 第二阶段，补更强的时间真值
+
+P2 还没有完成的部分，不是 strict 过滤，而是真正把时间口径做强：
+
+1. 对关键程序补 fixed-work repeat timing。
+2. 用中位数 wall time 构建更稳的 `score_time`。
+3. 用更强时间真值做外部验证，而不是继续主要依赖 proxy 内部相关性。
+
+这一部分目前仍然是硬缺口，因为 strict 口径下 `corr_model_time = 0.4325` 仍然只能算中等相关。
+
+### 4.2 未完成：P3 收敛阶段，只继续攻 O2/O3
+
+P3 当前虽然已完成一个可工作阶段，但还没有完全收敛：
+
+1. `O2` / `O3` 的 variant-local tuned best 已经有稳定信号。
+2. `O0` / `O1` 仍然只能依赖 `ALL` 回退，局部 tuned 不可靠。
+3. 当前最难的仍是 `O2-O3`，tie rate 高、`|log_ratio|` 小，天然就是最密集的 near-tie 区间。
+
+所以 P3 未完成的重点不是“继续普遍调参”，而是继续补 `O2/O3` 的 near-tie 数据与 fixed-work timing，只在真正有信号的区间继续收敛。
+
+### 4.3 未完成：P5 第二阶段，把质量信号正式接入训练
+
+P5 还没做完的部分主要有两块：
+
+1. 更系统地识别长期弱信号特征，而不只处理当前已知的零方差列。
 2. 把 `active_pid_count`、`active_window_ratio`、`window_count` 这类质量信号更完整地接入训练采样权重，而不只用于时间真值过滤和锚点质量加权。
 
-## 4. 当前优先级顺序
+这部分目前还停留在方向明确、实现未落地的状态。
+
+## 5. 改进策略
+
+下一轮更合理的改进策略，不是同时重开 P1 到 P5，而是按“先稳底座，再补真值，最后再做模型侧细化”的顺序推进：
+
+1. 先把 P1 和 P4 当成当前稳定底座，不要反复改动语义过滤规则和默认锚点策略，除非数据采集口径发生变化。
+2. 把 P2 当成当前主线任务，优先补关键程序的 fixed-work repeat timing 和中位数 wall time，提升 `score_time` 的真实性。
+3. 把 P3 的后续工作严格收缩到 `O2/O3` 这类 near-tie 高密度区间，不再把 `O0/O1` 的局部 tuned 最优当成主要优化目标。
+4. 把 P5 的后续工作做成受控增量：先做特征审计，再引入质量权重，避免一次性同时改模型、改输入、改采样。
+5. 每次改动都以 `run_features / pairs / anchor_set / model / scores / score_time_eval` 这条链路可重建为前提，并同时回看 proxy 与 strict time 两套指标，避免只靠单一指标决策。
+
+## 6. 当前优先级顺序
 
 建议的执行顺序如下：
 
-1. 先保留并稳定语义过滤。
-2. 保持 `run_features / pairs / anchor_set / model / scores / score_time_eval` 这条重建链路可重复。
-3. 给 [scripts/score_program.py](../../scripts/score_program.py) 增加 tuned-default fallback：当某个 variant tuned 指标是 `NaN` 或样本口径不足时，自动回退到 `ALL`。
-4. 继续只在 `O2` / `O3` 这类真正有信号的近邻 variant 上细扫 P3 参数，而不是把 `O0` / `O1` 的局部最优当真。
-5. 然后再补更强的 fixed-work repeat timing 与 wall-time 真值，把 `score_time` 口径继续做实。
+1. 先保持 P1 语义过滤和 P4 锚点策略稳定，确保整条重建链路可重复。
+2. 然后补强 P2：对关键程序补 fixed-work repeat timing，用中位数 wall time 做更强的 `score_time` 真值。
+3. 再继续推进 P3，但只聚焦 `O2` / `O3` 的 near-tie 区间，结合新增时间真值做局部收敛。
+4. 在数据和评分底座更稳之后，再推进 P5 第二阶段，把质量信号接入训练采样权重。
+5. 最后再做更系统的弱特征审计，而不是一开始就继续加模型复杂度。
 
-## 5. 当前判断
+## 7. 当前判断
 
-到这一步，问题已经不是“这套流程能不能跑通”，而是“哪些 run 值得信、哪些 pair 天然难、哪些目标和真实时间还有偏差”。
+到这一步，问题已经不是“这套流程能不能跑通”，而是“哪些部分已经可以当默认底座、哪些部分还值得继续投入”。
 
-所以当前最值钱的优化方向非常明确：
+当前更准确的判断是：
 
-先让数据语义正确，再讨论模型复杂度。
+1. P1、P4 和 P5 第一阶段已经属于已完成基础设施。
+2. P2 第一阶段和 P3 当前阶段也已经落地，但都还有一个明确的后半程要补。
+3. 下一轮最值钱的投入不是继续扩模型，而是补更强的时间真值，并只在 `O2/O3` 这种真正困难且有信号的区间继续收敛。
+
+所以当前最合理的主线非常明确：
+
+先稳住已经完成的底座，再把时间真值和 near-tie 难例做实，然后再讨论进一步的模型复杂度。

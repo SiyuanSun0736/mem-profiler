@@ -11,7 +11,13 @@ score_program.py — 单程序优化分数推断（方案 A：参考锚点法 ·
                = log(T_O0/T_{r_k}) + log(T_{r_k}/T_query)
                = log(T_O0 / T_query)                    ← 与 O0 基准的对数性能提升
 
-多锚点平均：   S_query = mean_k [ S_{r_k} + model(query, r_k) ]
+多锚点聚合：   先对每个锚点生成 S_{r_k} + model(query, r_k)，
+                             再按 anchor_quality × variant 距离权重 × 分类置信度加权聚合
+                             并对同一程序的多个 estimate 做中位数离群过滤
+
+tie-aware 解码：
+    辅助 3 分类头参与近 tie pair 的 gating；高 p_tie 的 pair 会被压缩到接近 0，
+    非 tie pair 的投票权重还会混入 direction margin，降低近 tie directional pair 的影响
 
 0-100 分数：   使用训练集中所有变体的 score_gt 分布做百分位归一化。
 
@@ -30,8 +36,8 @@ score_program.py — 单程序优化分数推断（方案 A：参考锚点法 ·
 
 输出
 ----
-  train_set/scores.parquet     — 每次 run 的分数 + 归因
-  train_set/score_eval.json    — 汇总评估指标（预测 vs 真值 S）
+    train_set/scores.parquet     — 每次 run 的分数 + 归因 + 锚点聚合诊断
+    train_set/score_eval.json    — 汇总评估指标（预测 vs 真值 S）
 
 用法
 ----

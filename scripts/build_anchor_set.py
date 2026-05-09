@@ -11,8 +11,13 @@ build_anchor_set.py — 构建参考锚点集（方案 A：参考锚点法）
 锚点定义
   对每个程序家族：
     - O0 变体作为基准锚点（baseline），S_O0 = 0
-    - O3 变体作为"强优化"锚点（若可用），S_O3 = log(cpi_O0 / cpi_O3)
+        - 默认将 O0/O2/O3 纳入锚点集；O2/O3 作为参考锚点（若可用）
       其中 cpi_k = cycles_per_iter_k
+
+锚点质量
+    对每个锚点额外写出：
+        - active_window_ratio = active_window_count / window_count
+        - anchor_quality      = pid 活跃度与活跃窗口占比的组合质量分数
 
 标准化分数
   S_k = log(cpi_O0 / cpi_k)
@@ -22,8 +27,9 @@ build_anchor_set.py — 构建参考锚点集（方案 A：参考锚点法）
 
 输出
   train_set/anchor_set.parquet
-    columns: program, variant, total_cycles, score_gt,
-             anchor_role, [NON_TIME_COLS z-scored features...]
+        columns: program, variant, total_cycles, cycles_per_iter, score_gt,
+                         anchor_role, active_window_ratio, anchor_quality,
+                         [NON_TIME_COLS z-scored features...]
 
 用法
   python scripts/build_anchor_set.py
@@ -119,7 +125,7 @@ def main() -> None:
     }
 
     baseline_variant = args.anchors[0]  # 通常是 O0
-    anchor_variants  = args.anchors      # ["O0", "O3"]
+    anchor_variants  = args.anchors      # 默认 ["O0", "O2", "O3"]
 
     records: list[dict] = []
     programs_ok = 0

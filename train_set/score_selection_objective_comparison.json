@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-07 09:42:55 UTC",
+  "generated_at": "2026-05-07 12:13:34 UTC",
   "objectives": {
     "score_first": {
       "selection": "score",
@@ -7,8 +7,8 @@
       "score_eval": {
         "n_runs": 509,
         "n_with_gt": 374,
-        "mae_score_log": 0.3174,
-        "corr_score_log": 0.8996,
+        "mae_score_log": 0.316,
+        "corr_score_log": 0.9005,
         "dir_accuracy": 0.7567,
         "band_accuracy": 0.8075
       },
@@ -34,9 +34,9 @@
         "spearman_proxy": 0.551755,
         "dir_acc_proxy": 0.863158,
         "band_acc_proxy": 0.653061,
-        "mae_model_time": 1.003126,
-        "corr_model_time": 0.432066,
-        "spearman_model": 0.517421,
+        "mae_model_time": 1.002548,
+        "corr_model_time": 0.432531,
+        "spearman_model": 0.518082,
         "dir_acc_model": 0.863158,
         "band_acc_model": 0.676871,
         "score_time_mean": 0.439695,
@@ -50,11 +50,11 @@
           "spearman_proxy": 0.27555,
           "dir_acc_proxy": 0.703252,
           "band_acc_proxy": 0.617647,
-          "mae_model_time": 1.14054,
-          "corr_model_time": 0.280532,
-          "spearman_model": 0.272362,
+          "mae_model_time": 1.142282,
+          "corr_model_time": 0.279934,
+          "spearman_model": 0.270114,
           "dir_acc_model": 0.703252,
-          "band_acc_model": 0.606952,
+          "band_acc_model": 0.604278,
           "score_time_mean": 0.308426,
           "score_time_std": 0.603577
         }
@@ -66,8 +66,8 @@
       "score_eval": {
         "n_runs": 509,
         "n_with_gt": 374,
-        "mae_score_log": 0.3204,
-        "corr_score_log": 0.8985,
+        "mae_score_log": 0.3194,
+        "corr_score_log": 0.899,
         "dir_accuracy": 0.7567,
         "band_accuracy": 0.8075
       },
@@ -93,9 +93,9 @@
         "spearman_proxy": 0.551755,
         "dir_acc_proxy": 0.863158,
         "band_acc_proxy": 0.653061,
-        "mae_model_time": 0.999312,
-        "corr_model_time": 0.433651,
-        "spearman_model": 0.51924,
+        "mae_model_time": 0.997537,
+        "corr_model_time": 0.434905,
+        "spearman_model": 0.520927,
         "dir_acc_model": 0.863158,
         "band_acc_model": 0.683673,
         "score_time_mean": 0.439695,
@@ -109,11 +109,11 @@
           "spearman_proxy": 0.27555,
           "dir_acc_proxy": 0.703252,
           "band_acc_proxy": 0.617647,
-          "mae_model_time": 1.137542,
-          "corr_model_time": 0.280999,
-          "spearman_model": 0.272637,
+          "mae_model_time": 1.138275,
+          "corr_model_time": 0.280776,
+          "spearman_model": 0.270903,
           "dir_acc_model": 0.703252,
-          "band_acc_model": 0.606952,
+          "band_acc_model": 0.604278,
           "score_time_mean": 0.308426,
           "score_time_std": 0.603577
         }
@@ -123,17 +123,17 @@
   "metrics": [
     {
       "metric": "proxy.corr_score_log",
-      "score_first": 0.8996,
-      "time_first": 0.8985,
-      "delta_score_minus_time": 0.0010999999999999899,
+      "score_first": 0.9005,
+      "time_first": 0.899,
+      "delta_score_minus_time": 0.0014999999999999458,
       "better": "higher",
       "preferred": "score-first"
     },
     {
       "metric": "proxy.mae_score_log",
-      "score_first": 0.3174,
-      "time_first": 0.3204,
-      "delta_score_minus_time": -0.0030000000000000027,
+      "score_first": 0.316,
+      "time_first": 0.3194,
+      "delta_score_minus_time": -0.003400000000000014,
       "better": "lower",
       "preferred": "score-first"
     },
@@ -155,25 +155,25 @@
     },
     {
       "metric": "time.corr_model_time",
-      "score_first": 0.432066,
-      "time_first": 0.433651,
-      "delta_score_minus_time": -0.001585000000000003,
+      "score_first": 0.432531,
+      "time_first": 0.434905,
+      "delta_score_minus_time": -0.0023739999999999872,
       "better": "higher",
       "preferred": "time-first"
     },
     {
       "metric": "time.spearman_model",
-      "score_first": 0.517421,
-      "time_first": 0.51924,
-      "delta_score_minus_time": -0.001819000000000015,
+      "score_first": 0.518082,
+      "time_first": 0.520927,
+      "delta_score_minus_time": -0.0028449999999999864,
       "better": "higher",
       "preferred": "time-first"
     },
     {
       "metric": "time.mae_model_time",
-      "score_first": 1.003126,
-      "time_first": 0.999312,
-      "delta_score_minus_time": 0.003813999999999984,
+      "score_first": 1.002548,
+      "time_first": 0.997537,
+      "delta_score_minus_time": 0.005010999999999988,
       "better": "lower",
       "preferred": "time-first"
     },
@@ -205,10 +205,10 @@
   "recommendation": {
     "recommended_default": "score-first",
     "reason": [
-      "proxy Pearson r 提升 +0.0011",
-      "proxy MAE 改善 +0.0030",
-      "strict time Pearson r 仅变化 -0.0016",
-      "strict time Spearman 仅变化 -0.0018"
+      "proxy Pearson r 提升 +0.0015",
+      "proxy MAE 改善 +0.0034",
+      "strict time Pearson r 仅变化 -0.0024",
+      "strict time Spearman 仅变化 -0.0028"
     ]
   },
   "variant_reliability": [
@@ -221,9 +221,9 @@
       "n_time_valid": 104,
       "score_corr": null,
       "time_corr": null,
-      "tie_gate_threshold": 0.5,
-      "tie_shrink_power": 0.75,
-      "tie_margin_weight_alpha": 0.5
+      "tie_gate_threshold": 0.48,
+      "tie_shrink_power": 0.65,
+      "tie_margin_weight_alpha": 0.55
     },
     {
       "objective": "score_first",
@@ -233,10 +233,10 @@
       "n_score_valid": 0,
       "n_time_valid": 96,
       "score_corr": null,
-      "time_corr": -0.087551,
-      "tie_gate_threshold": 0.5,
-      "tie_shrink_power": 0.75,
-      "tie_margin_weight_alpha": 0.5
+      "time_corr": -0.080368,
+      "tie_gate_threshold": 0.48,
+      "tie_shrink_power": 0.65,
+      "tie_margin_weight_alpha": 0.55
     },
     {
       "objective": "score_first",
@@ -245,11 +245,11 @@
       "reason": "ok",
       "n_score_valid": 124,
       "n_time_valid": 95,
-      "score_corr": 0.911235,
-      "time_corr": 0.226174,
+      "score_corr": 0.911451,
+      "time_corr": 0.225658,
       "tie_gate_threshold": 0.6,
       "tie_shrink_power": 1.25,
-      "tie_margin_weight_alpha": 0.15
+      "tie_margin_weight_alpha": 0.1
     },
     {
       "objective": "score_first",
@@ -258,11 +258,11 @@
       "reason": "ok",
       "n_score_valid": 122,
       "n_time_valid": 95,
-      "score_corr": 0.940632,
-      "time_corr": 0.170416,
-      "tie_gate_threshold": 0.55,
+      "score_corr": 0.942644,
+      "time_corr": 0.172104,
+      "tie_gate_threshold": 0.62,
       "tie_shrink_power": 1.25,
-      "tie_margin_weight_alpha": 0.15
+      "tie_margin_weight_alpha": 0.1
     },
     {
       "objective": "time_first",
@@ -273,9 +273,9 @@
       "n_time_valid": 104,
       "score_corr": null,
       "time_corr": null,
-      "tie_gate_threshold": 0.5,
-      "tie_shrink_power": 0.75,
-      "tie_margin_weight_alpha": 0.5
+      "tie_gate_threshold": 0.48,
+      "tie_shrink_power": 0.65,
+      "tie_margin_weight_alpha": 0.55
     },
     {
       "objective": "time_first",
@@ -285,10 +285,10 @@
       "n_score_valid": 0,
       "n_time_valid": 96,
       "score_corr": null,
-      "time_corr": -0.087551,
-      "tie_gate_threshold": 0.5,
-      "tie_shrink_power": 0.75,
-      "tie_margin_weight_alpha": 0.5
+      "time_corr": -0.080368,
+      "tie_gate_threshold": 0.48,
+      "tie_shrink_power": 0.65,
+      "tie_margin_weight_alpha": 0.55
     },
     {
       "objective": "time_first",
@@ -297,11 +297,11 @@
       "reason": "ok",
       "n_score_valid": 124,
       "n_time_valid": 95,
-      "score_corr": 0.909458,
-      "time_corr": 0.230063,
-      "tie_gate_threshold": 0.6,
+      "score_corr": 0.909147,
+      "time_corr": 0.230776,
+      "tie_gate_threshold": 0.62,
       "tie_shrink_power": 1.25,
-      "tie_margin_weight_alpha": 0.5
+      "tie_margin_weight_alpha": 0.55
     },
     {
       "objective": "time_first",
@@ -310,11 +310,11 @@
       "reason": "ok",
       "n_score_valid": 122,
       "n_time_valid": 95,
-      "score_corr": 0.939122,
-      "time_corr": 0.17287,
+      "score_corr": 0.940689,
+      "time_corr": 0.175708,
       "tie_gate_threshold": 0.55,
       "tie_shrink_power": 1.25,
-      "tie_margin_weight_alpha": 0.5
+      "tie_margin_weight_alpha": 0.55
     }
   ]
 }

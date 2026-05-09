@@ -70,7 +70,7 @@
 1. 当前 `pairs.parquet` 覆盖 1494 条 pair、129 个程序；标签分布仍然基本均衡，但 tie 只占 208 条。
 2. 当前主模型 PairTransformer 在测试集上的结果是：`dir_acc = 0.8775`、`acc_3cls = 0.7833`、`r2 = 0.7926`。
 3. 当前最难的边界不是 O0 对高优化级别，而是 `O2-O3`：`acc_3cls = 0.4500`、`aux_tie_recall = 0.5455`，且全量 tie rate 达到 `0.4524`。
-4. 单程序评分已经能工作：默认 score-first tuned 参数下，`corr_score_log = 0.8996`、`mae_score_log = 0.3174`、`band_accuracy = 0.8075`；但 strict 时间外部验证仍只有 `corr_model_time = 0.4321`，所以时间真值仍是短板。
+4. 单程序评分已经能工作：默认 score-first tuned 参数下，`corr_score_log = 0.9005`、`mae_score_log = 0.3160`、`band_accuracy = 0.8075`；但 strict 时间外部验证仍只有 `corr_model_time = 0.4325`，所以时间真值仍是短板。
 
 ## 这版方案主动放弃什么
 

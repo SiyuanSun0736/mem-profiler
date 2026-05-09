@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-build_time_score_table.py — 基于 wall_time_sec 构建时间评分基准表
-=================================================================
+build_time_score_table.py — 构建带 repeat timing 优先逻辑的时间评分基准表
+==========================================================================
 
 原理
 ----
-采集脚本使用 while-true 循环，让短命程序持续重建。在 60 s 窗口内：
+默认先尝试读取每个 output_dir 下的 repeat_timing.json。若 baseline 与当前 variant
+都存在有效 repeat timing，则优先使用其中的 median_wall_time_sec 构造 score_time。
+
+若缺少 repeat timing，则回退到现有 60 s BCC 采集窗口中的 proxy：
 
   time_per_iter(k)  =  wall_time_sec / active_pid_count
                      ≈  单次迭代平均挂钟时间（秒）
@@ -22,7 +25,7 @@ build_time_score_table.py — 基于 wall_time_sec 构建时间评分基准表
 
 输出
 ----
-  train_set/time_scores.parquet   — 含 time_per_iter, score_time 的评分表
+    train_set/time_scores.parquet   — 含 proxy / repeat / preferred 三套时间列的评分表
 
 用法
 ----
@@ -46,6 +49,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 BASELINE_VARIANT = "O0"
 DEFAULT_MIN_ACTIVE_PIDS = 5
 DEFAULT_MIN_ACTIVE_WINDOW_RATIO = 0.10
+DEFAULT_REPEAT_TIMING_NAME = "repeat_timing.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -82,6 +86,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_MIN_ACTIVE_WINDOW_RATIO,
         help="构造严格时间真值时要求的最小 active_window_count / window_count（默认 0.10）",
     )
+    p.add_argument(
+        "--repeat-timing-name",
+        default=DEFAULT_REPEAT_TIMING_NAME,
+        help="若 output_dir 下存在该 sidecar，则优先使用 repeat timing 中位数 wall time",
+    )
     return p.parse_args()
 
 
@@ -89,6 +98,13 @@ def _safe_div(numer: float, denom: float) -> float:
     if denom <= 0:
         return float("nan")
     return float(numer / denom)
+
+
+def _safe_float(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
 
 
 def _score_time_from_pair(t_base: float, t_variant: float) -> float:
@@ -110,11 +126,71 @@ def _strict_invalid_reasons(
     return reasons
 
 
+def _empty_repeat_timing_info() -> dict[str, object]:
+    return {
+        "repeat_timing_path": "",
+        "repeat_timing_available": False,
+        "repeat_timing_valid": False,
+        "repeat_success_count": 0,
+        "repeat_count": 0,
+        "repeat_median_wall_time_sec": float("nan"),
+        "repeat_mad_wall_time_sec": float("nan"),
+        "time_per_iter_repeat": float("nan"),
+    }
+
+
+def _load_repeat_timing_info(output_dir: object, repeat_timing_name: str) -> dict[str, object]:
+    info = _empty_repeat_timing_info()
+    if output_dir is None:
+        return info
+
+    raw_output_dir = str(output_dir).strip()
+    if not raw_output_dir:
+        return info
+
+    resolved_output_dir = pathlib.Path(raw_output_dir)
+    if not resolved_output_dir.is_absolute():
+        resolved_output_dir = REPO_ROOT / resolved_output_dir
+    repeat_path = resolved_output_dir / repeat_timing_name
+    if not repeat_path.exists():
+        return info
+
+    info["repeat_timing_available"] = True
+    try:
+        info["repeat_timing_path"] = str(repeat_path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        info["repeat_timing_path"] = str(repeat_path.resolve())
+
+    try:
+        payload = json.loads(repeat_path.read_text(encoding="utf-8"))
+    except Exception:
+        return info
+
+    success_count = int(payload.get("success_count", 0) or 0)
+    repeat_count = int(payload.get("repeat_count", 0) or 0)
+    median_wall_time_sec = _safe_float(payload.get("median_wall_time_sec"))
+    mad_wall_time_sec = _safe_float(payload.get("mad_wall_time_sec"))
+    valid = bool(payload.get("valid", False))
+    if not valid and repeat_count > 0 and success_count >= repeat_count:
+        valid = True
+
+    info.update({
+        "repeat_timing_valid": bool(valid and math.isfinite(median_wall_time_sec) and median_wall_time_sec > 0.0),
+        "repeat_success_count": success_count,
+        "repeat_count": repeat_count,
+        "repeat_median_wall_time_sec": median_wall_time_sec,
+        "repeat_mad_wall_time_sec": mad_wall_time_sec,
+        "time_per_iter_repeat": median_wall_time_sec if valid and math.isfinite(median_wall_time_sec) and median_wall_time_sec > 0.0 else float("nan"),
+    })
+    return info
+
+
 def build_time_scores(
     rf: pd.DataFrame,
     baseline: str,
     min_active_pids: int,
     min_active_window_ratio: float,
+    repeat_timing_name: str,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     required = {"program", "variant", "wall_time_sec", "active_pid_count"}
     missing = required - set(rf.columns)
@@ -136,15 +212,34 @@ def build_time_scores(
         lambda r: _safe_div(r["wall_time_sec"], r["active_pid_count"]),
         axis=1,
     )
+    rf["time_per_iter_proxy"] = rf["time_per_iter"]
 
-    loose_base_rows = rf[rf["variant"] == baseline][["program", "time_per_iter"]].copy()
-    loose_base_rows = loose_base_rows.dropna(subset=["time_per_iter"])
+    if "output_dir" in rf.columns:
+        output_dir_values = rf["output_dir"].fillna("").astype(str)
+        repeat_infos = {
+            output_dir: _load_repeat_timing_info(output_dir, repeat_timing_name)
+            for output_dir in output_dir_values.unique()
+        }
+        repeat_df = pd.DataFrame(
+            [repeat_infos[output_dir] for output_dir in output_dir_values],
+            index=rf.index,
+        )
+    else:
+        repeat_df = pd.DataFrame(
+            [_empty_repeat_timing_info() for _ in range(len(rf))],
+            index=rf.index,
+        )
+    rf = pd.concat([rf, repeat_df], axis=1)
+
+    loose_base_rows = rf[rf["variant"] == baseline][["program", "time_per_iter_proxy"]].copy()
+    loose_base_rows = loose_base_rows.dropna(subset=["time_per_iter_proxy"])
     loose_base_rows = loose_base_rows.rename(columns={"time_per_iter": "time_per_iter_base_loose"})
+    loose_base_rows = loose_base_rows.rename(columns={"time_per_iter_proxy": "time_per_iter_base_loose"})
     loose_base_map = loose_base_rows.groupby("program")["time_per_iter_base_loose"].mean()
     rf["has_loose_baseline"] = rf["program"].isin(set(loose_base_map.index))
     rf["time_per_iter_base_loose"] = rf["program"].map(loose_base_map)
     rf["score_time_loose"] = rf.apply(
-        lambda row: _score_time_from_pair(row["time_per_iter_base_loose"], row["time_per_iter"]),
+        lambda row: _score_time_from_pair(row["time_per_iter_base_loose"], row["time_per_iter_proxy"]),
         axis=1,
     )
 
@@ -160,19 +255,47 @@ def build_time_scores(
 
     strict_base_rows = rf[
         (rf["variant"] == baseline) & rf["time_score_input_ok"]
-    ][["program", "time_per_iter"]].copy()
-    strict_base_rows = strict_base_rows.dropna(subset=["time_per_iter"])
-    strict_base_rows = strict_base_rows.rename(columns={"time_per_iter": "time_per_iter_base"})
+    ][["program", "time_per_iter_proxy"]].copy()
+    strict_base_rows = strict_base_rows.dropna(subset=["time_per_iter_proxy"])
+    strict_base_rows = strict_base_rows.rename(columns={"time_per_iter_proxy": "time_per_iter_base"})
     strict_base_map = strict_base_rows.groupby("program")["time_per_iter_base"].mean()
 
     rf["has_strict_baseline"] = rf["program"].isin(set(strict_base_map.index))
     rf["time_per_iter_base"] = rf["program"].map(strict_base_map)
-    rf["score_time"] = rf.apply(
+    rf["time_per_iter_base_proxy"] = rf["time_per_iter_base"]
+    rf["score_time_proxy"] = rf.apply(
         lambda row: _score_time_from_pair(row["time_per_iter_base"], row["time_per_iter"])
         if row["time_score_input_ok"] and row["has_strict_baseline"]
         else float("nan"),
         axis=1,
     )
+
+    repeat_base_rows = rf[
+        (rf["variant"] == baseline) & rf["repeat_timing_valid"]
+    ][["program", "time_per_iter_repeat"]].copy()
+    repeat_base_rows = repeat_base_rows.dropna(subset=["time_per_iter_repeat"])
+    repeat_base_rows = repeat_base_rows.rename(columns={"time_per_iter_repeat": "time_per_iter_base_repeat"})
+    repeat_base_map = repeat_base_rows.groupby("program")["time_per_iter_base_repeat"].mean()
+
+    rf["has_repeat_baseline"] = rf["program"].isin(set(repeat_base_map.index))
+    rf["time_per_iter_base_repeat"] = rf["program"].map(repeat_base_map)
+    rf["score_time_repeat"] = rf.apply(
+        lambda row: _score_time_from_pair(row["time_per_iter_base_repeat"], row["time_per_iter_repeat"])
+        if row["repeat_timing_valid"] and row["has_repeat_baseline"]
+        else float("nan"),
+        axis=1,
+    )
+
+    rf["time_per_iter_preferred"] = rf["time_per_iter_proxy"]
+    rf["time_per_iter_base_preferred"] = rf["time_per_iter_base_proxy"]
+    rf["score_time"] = rf["score_time_proxy"]
+    rf["score_time_source"] = ""
+    rf.loc[rf["score_time_proxy"].notna(), "score_time_source"] = "proxy_strict"
+    repeat_mask = rf["score_time_repeat"].notna()
+    rf.loc[repeat_mask, "time_per_iter_preferred"] = rf.loc[repeat_mask, "time_per_iter_repeat"]
+    rf.loc[repeat_mask, "time_per_iter_base_preferred"] = rf.loc[repeat_mask, "time_per_iter_base_repeat"]
+    rf.loc[repeat_mask, "score_time"] = rf.loc[repeat_mask, "score_time_repeat"]
+    rf.loc[repeat_mask, "score_time_source"] = "repeat_timing"
     rf["time_score_strict_ok"] = rf["score_time"].notna()
     rf["time_score_invalid_reasons"] = rf["time_score_invalid_reasons"].apply(
         lambda reasons: "|".join(reasons)
@@ -190,6 +313,7 @@ def build_time_scores(
 
     summary: dict[str, object] = {
         "baseline": baseline,
+        "repeat_timing_name": repeat_timing_name,
         "min_active_pids": int(min_active_pids),
         "min_active_window_ratio": float(min_active_window_ratio),
         "active_window_ratio_available": bool(ratio_cols_present),
@@ -199,9 +323,21 @@ def build_time_scores(
         "n_input_filtered": int((~rf["time_score_input_ok"]).sum()),
         "n_programs_with_loose_baseline": int(len(loose_base_map)),
         "n_programs_with_strict_baseline": int(len(strict_base_map)),
+        "n_programs_with_repeat_baseline": int(len(repeat_base_map)),
         "n_valid_loose": int(rf["score_time_loose"].notna().sum()),
+        "n_valid_strict_proxy": int(rf["score_time_proxy"].notna().sum()),
+        "n_valid_repeat": int(rf["score_time_repeat"].notna().sum()),
         "n_valid_strict": int(rf["score_time"].notna().sum()),
         "reasons": reason_counts,
+        "repeat_timing": {
+            "n_available_rows": int(rf["repeat_timing_available"].sum()),
+            "n_valid_rows": int(rf["repeat_timing_valid"].sum()),
+            "n_preferred_repeat": int((rf["score_time_source"] == "repeat_timing").sum()),
+            "n_preferred_proxy": int((rf["score_time_source"] == "proxy_strict").sum()),
+            "n_rescued_by_repeat_timing": int(
+                (rf["score_time_repeat"].notna() & rf["score_time_proxy"].isna()).sum()
+            ),
+        },
         "by_variant": {},
     }
 
@@ -228,23 +364,45 @@ def build_time_scores(
             "input_ok": int(sub["time_score_input_ok"].sum()),
             "input_filtered": int((~sub["time_score_input_ok"]).sum()),
             "valid_loose": int(sub["score_time_loose"].notna().sum()),
+            "valid_strict_proxy": int(sub["score_time_proxy"].notna().sum()),
+            "valid_repeat": int(sub["score_time_repeat"].notna().sum()),
             "valid_strict": int(sub["score_time"].notna().sum()),
+            "preferred_repeat": int((sub["score_time_source"] == "repeat_timing").sum()),
+            "preferred_proxy": int((sub["score_time_source"] == "proxy_strict").sum()),
         }
 
     keep_cols = [
         "program",
         "variant",
+        "output_dir",
         "wall_time_sec",
         "active_pid_count",
         "active_window_ratio",
         "time_per_iter",
+        "time_per_iter_proxy",
+        "time_per_iter_repeat",
+        "time_per_iter_preferred",
         "time_per_iter_base_loose",
         "score_time_loose",
         "time_score_input_ok",
         "has_loose_baseline",
         "has_strict_baseline",
+        "has_repeat_baseline",
         "time_score_invalid_reasons",
         "time_per_iter_base",
+        "time_per_iter_base_proxy",
+        "time_per_iter_base_repeat",
+        "time_per_iter_base_preferred",
+        "repeat_timing_path",
+        "repeat_timing_available",
+        "repeat_timing_valid",
+        "repeat_success_count",
+        "repeat_count",
+        "repeat_median_wall_time_sec",
+        "repeat_mad_wall_time_sec",
+        "score_time_proxy",
+        "score_time_repeat",
+        "score_time_source",
         "score_time",
         "time_score_strict_ok",
     ]
@@ -273,10 +431,13 @@ def main() -> None:
         baseline=args.baseline,
         min_active_pids=args.min_active_pids,
         min_active_window_ratio=args.min_active_window_ratio,
+        repeat_timing_name=args.repeat_timing_name,
     )
 
     n_valid_loose = int(out["score_time_loose"].notna().sum())
     n_valid = int(out["score_time"].notna().sum())
+    n_valid_proxy = int(out["score_time_proxy"].notna().sum()) if "score_time_proxy" in out.columns else n_valid
+    n_preferred_repeat = int((out["score_time_source"] == "repeat_timing").sum()) if "score_time_source" in out.columns else 0
     n_total = len(out)
     n_prog  = out["program"].nunique()
     print(
@@ -289,6 +450,11 @@ def main() -> None:
         f"active_window_ratio >= {args.min_active_window_ratio:.3f}",
         flush=True,
     )
+    print(
+        f"       strict 来源: repeat={n_preferred_repeat}，proxy={n_valid - n_preferred_repeat}"
+        f"（proxy-only strict={n_valid_proxy}，repeat rescue={summary['repeat_timing']['n_rescued_by_repeat_timing']}）",
+        flush=True,
+    )
 
     if n_valid > 0:
         valid = out.dropna(subset=["score_time"])
@@ -299,7 +465,8 @@ def main() -> None:
 
     print(
         f"[info] 严格过滤摘要: 输入过滤 {summary['n_input_filtered']} 行，"
-        f"缺失严格基线 {summary['reasons']['missing_strict_baseline']} 行",
+        f"缺失严格基线 {summary['reasons']['missing_strict_baseline']} 行，"
+        f"有效 repeat timing {summary['repeat_timing']['n_valid_rows']} 行",
         flush=True,
     )
 

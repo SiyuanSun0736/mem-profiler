@@ -8,70 +8,70 @@
 
 | 里程碑 | 状态 | 当前证据 | 判断 |
 | --- | --- | --- | --- |
-| M0. 冻结数据集边界 | 已完成 | 已明确建模使用的是 145x4 冻结训练快照，而最新 raw 采集层仍需单独冻结 | 方案边界终于和数据一致了 |
-| M1. 跑通运行级样本构建 | 已完成 | 已有 `run_features.parquet` | 运行级摘要主输入已经稳定存在 |
-| M2. 跑通成对建模闭环 | 已完成 | 已有 `pairs.parquet`、MLP、PairTransformer 结果 | pairwise 主任务已经成立 |
-| M3. 跑通单程序评分 | 部分完成 | 已有 `anchor_set.parquet`、`scores.parquet`、`score_eval.json` | 分数可用，但还需要用时间评分做最终闭环验证 |
-| M4. 跑通诊断证据绑定 | 部分完成 | 已有热点、归因、指标关系脚本 | 证据链存在，但还没自动挂到评分输出 |
-| M5. 扩展特征并重训 | 未开始 | fault subtype、mm syscall 等字段还没进主特征 | 这是当前最值钱的下一步 |
+| M0. 冻结数据集边界 | 已完成 | 已明确当前账本口径是 `145 x 4 / 580 runs`，训练口径是语义过滤后的 `509 runs / 1494 pairs / 374 anchors` | 方案边界与当前产物一致 |
+| M1. 跑通运行级样本构建 | 已完成 | 已有 `run_features.parquet`、`run_features_zscore.parquet`、`run_feature_filter_summary.json` | 运行级摘要和过滤口径都已固定 |
+| M2. 跑通成对建模闭环 | 已完成 | 已有 `pairs.parquet`、`model_transformer_eval.json`、按程序 held-out 划分结果 | pairwise 主任务已经成立 |
+| M3. 跑通单程序评分 | 部分完成 | 已有 `anchor_set.parquet`、`score_eval.json`、`score_time_eval.json` | proxy 口径已稳，但真实时间一致性仍只有中等相关 |
+| M4. 跑通诊断证据绑定 | 部分完成 | `score_program.py` 已输出分数、档位和一级瓶颈，但还没沉淀成标准化诊断报告文件 | 证据链已存在，自动挂接还没完全收口 |
+| M5. 扩展特征并重训 | 部分完成 | fault subtype、mm syscall、warmup/steady-state 已进入主特征；`feature_columns.py` 已统一输入列 | 第一轮特征扩展已落地，下一步应转向增益验证和剩余字段补齐 |
 | M6. 扩展数据集 | 未开始 | 还没有 repeat、布局 family 或多机数据 | 不应先做 |
 
-如果按这套重设计后的目标估算，当前整体完成度更接近 70%，而不是 55%。原因不是工作变多了，而是目标终于和真实数据匹配了。
+如果按这套重设计后的目标估算，当前已经明显处在“后半程收口”而不是“中途起步”。原因不是工作变少了，而是主线目标终于和真实数据、真实产物完全对齐了。
 
-这里有一个必须固定下来的前提：当前仓库同时存在两个数据口径。最新 raw manifest 的记录数是 `283/145/145/145`，而现有 `train_set` 仍是冻结的 `580` runs 快照。后续所有模型指标和里程碑判断，都应默认指向后者；凡是涉及“重建训练集”的工作，再回到前者。
+这里有一个必须固定下来的前提：当前仓库存在两个有效数据口径。第一层是去重后的 full/curated 账本，也就是 `145 x 4 / 580 runs`；第二层是语义过滤后的训练子集，也就是 `509 runs / 1494 pairs / 374 anchors`。后续所有模型指标和里程碑判断，都应默认指向第二层；凡是涉及“账本覆盖率”和“采集完整性”的讨论，再回到第一层。
 
 ### 0.1 当前量化结果
 
-> 最后更新：2026-04-27（全流程实测）
+> 最后更新：2026-05-07（按当前训练产物与默认评分口径同步）
 
-**数据规模（最新 raw manifest 口径，非冻结快照）：**
+**数据规模（当前 full/curated 账本与过滤后训练子集）：**
 
-- 145 个程序，717 条运行记录（O0=282，O1=145，O2=145，O3=145）
-- 1740 条 pair，290 条锚点记录
+- full/curated 账本：145 个程序，580 条运行记录
+- 过滤后训练子集：509 runs、1494 pairs、374 anchors
+- 当前 `pairs.parquet` 覆盖 129 个程序，`anchor_set.parquet` 覆盖 128 个拥有 O0 基线的程序
+- 当前输入特征为 53 维，pair 输入为 159 维；`minor_fault_ratio` 只保留在账本中，不再进入模型输入
 
-**朴素基线（variant 名义排名）：** test MAE=1.0899，R²=0.0522，`dir_acc=0.8182`，`acc_3cls=0.614`
+**PairTransformer（d_model=64，nhead=4，3层，53 维运行级输入）：** test MAE=0.5863，RMSE=0.9003，R²=0.7926，`dir_acc=0.8775`，`acc_3cls=0.7833`，`aux_acc_3cls=0.8292`
 
-**Ridge 线性基线（α=1.0，162维输入）：** test MAE=3.4759，R²=-56.83，`dir_acc=0.8283`，`acc_3cls=0.644`（严重过拟合）
+**按变体对细分：** `O2-O3` 仍是最难边界，test `acc_3cls=0.4500`、`aux_tie_recall=0.5455`
 
-**Phase 1 MLP（隐层=128/64/32，162维输入）：** train MAE=0.075 / test MAE=2.7349，R²=-37.32，`dir_acc=0.7879`，`acc_3cls=0.659`（严重过拟合）
+**单程序评分（score-first 默认口径，proxy）：** `mae_score_log=0.3160`，Pearson `r=0.9005`，`dir_acc=0.7567`，`band_acc=0.8075`
 
-**PairTransformer（d_model=64，nhead=4，3层）：** val MAE=0.2751，test MAE=0.5881，R²=0.5938，`dir_acc=0.7828`，`acc_3cls=0.735`（早停 epoch=96）
-
-**单程序评分（proxy 口径）：** MAE=0.4484，Pearson r=0.8280，`dir_acc=0.5667`，`band_acc=0.6909`
-
-**时间评分外部验证（score_time，可靠行 612/701）：**
-- proxy vs score_time：Pearson r=0.4874，Spearman ρ=0.3062，`band_acc=0.8840`
-- model vs score_time：Pearson r=0.4123，Spearman ρ=0.2065，`band_acc=0.8562`
+**时间评分外部验证（strict score_time，主统计 294/374）：**
+- proxy vs score_time：Pearson `r=0.4658`，Spearman `ρ=0.5518`，`band_acc=0.6531`
+- model vs score_time：Pearson `r=0.4325`，Spearman `ρ=0.5181`，`band_acc=0.6769`
 
 ### 0.2 当前判断
 
-1. non-time 运行级特征已经能恢复方向，代理任务成立。
-2. Transformer 当前更适合做方向判断器，而不一定是更好的纯回归器。
-3. 单程序评分已经可展示，但还不够稳，仍需靠锚点、证据设计，以及独立时间评分验证继续补强。
+1. non-time 运行级特征已经能稳定恢复方向，代理任务成立。
+2. 第一轮特征扩展已经完成，当前主要瓶颈不再是“fault/mm/warmup 还没接入”，而是时间真值、近 tie 样本和证据自动挂接。
+3. 单程序评分对 proxy 真值已经较稳，但对真实时间的外部一致性仍只有中等相关，因此 M3 仍不能算完全闭环。
 
 ---
 
-## 0.3 全流程执行日志（2026-04-27）
+## 0.3 全流程执行日志（2026-05-07）
 
-**执行环境**：Python `.venv`，CPU only（无 GPU），最新 raw manifest（非冻结快照）
+**执行环境**：Python `.venv`，CPU only（无 GPU），当前 curated/full 账本 + 过滤后训练子集
 
 **执行命令序列及结果：**
 
 ```bash
 # Step 1: 特征构建
-.venv/bin/python scripts/build_run_features.py
-# → 717 行，96 列；1 条缺失 window_metrics.jsonl（BitBench_uudecode_20260426_223145）被跳过
-# → minor_fault_ratio 方差为零（全零列，已置 0）
-# → 输出：run_features.parquet / run_features_zscore.parquet / feature_scaler.json
+.venv/bin/python scripts/build_run_features.py --manifest-prefix manifest_curated
+# → full/curated 账本 580 runs
+# → 语义过滤后保留 509 runs，过滤规则为 active_pid_count < 5 或 cycles_per_iter <= 0
+# → 输出：run_features.parquet / run_features_zscore.parquet / feature_scaler.json / run_feature_filter_summary.json
 
 # Step 2: pair 表构建
 .venv/bin/python scripts/build_pair_table.py
-# → 1740 条 pair，145 个程序
-# → i_better=684(39.3%)，tie=372(21.4%)，j_better=684(39.3%)
+# → 1494 条 pair，129 个程序
+# → feature_dim=53，input_dim=159
+# → i_better=643，tie=208，j_better=643
 
 # Step 3: anchor set 构建
 .venv/bin/python scripts/build_anchor_set.py
-# → 290 条锚点，145 个程序（O0 全部可用）
+# → 374 条锚点，128 个程序
+# → 默认锚点为 O0 / O2 / O3，并写入 active_window_ratio 与 anchor_quality
 
 # Step 4: 模型训练（Transformer）
 .venv/bin/python scripts/train_transformer.py
@@ -81,14 +81,14 @@
 
 # Step 5: 评分推断
 .venv/bin/python scripts/score_program.py --device cpu
-# → 默认使用 score-first tuned 参数
-# → 509 条评分，Pearson r=0.8996（vs proxy），dir_acc=0.7567，band_acc=0.8075
+# → 默认使用 score-first tuned 参数，并在局部 tuned 不可靠时自动回退到 ALL
+# → n_with_gt=374，Pearson r=0.9005（vs proxy），dir_acc=0.7567，band_acc=0.8075
 
 # Step 6: 时间评分验证
 .venv/bin/python scripts/build_time_score_table.py
 .venv/bin/python scripts/evaluate_score_vs_time.py
 # → strict 主统计 294/374，过滤 80 行低 active_window_ratio
-# → model vs score_time：Pearson r=0.4321，Spearman ρ=0.5174
+# → model vs score_time：Pearson r=0.4325，Spearman ρ=0.5181
 # → proxy vs score_time：Pearson r=0.4658，Spearman ρ=0.5518
 ```
 
@@ -99,7 +99,7 @@
 | 1 | O0/O1 的 variant-local tuned 结果不可靠：`O0 score_corr=NaN`，`O1 n_score_valid=0` | 已在 `score_program.py` 加可靠性回退，默认回退到 `ALL` |
 | 2 | 单程序评分与 proxy 真值已较稳，但 strict 时间外部验证仍只有中等相关 | 保留 `score-first` 默认，同时用 `--tuned-selection-objective time` 提供时间优先回放 |
 | 3 | O2/O3 仍是最难边界：`acc_3cls=0.4500`，tie 密度高 | 继续按 `current-data-quality-audit.md` 做 repeat timing / tie 阈值 / 时序特征分流 |
-| 4 | `minor_fault_ratio` 全为零（方差零列） | 已从 pair / anchor / model / score 输入中剔除 |
+| 4 | `minor_fault_ratio` 全为零（方差零列） | 已通过 `feature_columns.py` 从 pair / anchor / model / score 输入中统一剔除 |
 
 ## 1. 当前最合适的项目结构
 
@@ -230,18 +230,18 @@ dataset-first-optimization-plan/
 1. 每次评分都能附至少一种证据
 2. 证据可回指到原始窗口或实体
 
-### M5. 扩展特征并重训
+### M5. 验证扩展特征收益并补齐剩余字段
 
 交付物：
 
-1. fault subtype 扩展特征
-2. mm syscall 扩展特征
-3. warmup/steady-state 扩展特征
+1. 当前 53 维主输入的分组消融结果
+2. 尚未进入主输入的剩余 fault / mm 字段补齐实验
+3. `feature_columns.py`、scaler 与模型输入列的一致性检查
 
 验收标准：
 
-1. 在难 pair 上有真实提升
-2. 提升来自特征，而不是标签泄漏
+1. 能明确回答当前 fault subtype / mm syscall / warmup-stage 三组特征是否真的带来增益
+2. 若继续补列，提升必须来自特征而不是标签泄漏
 
 ### M6. 视情况扩数据集
 
@@ -259,11 +259,11 @@ dataset-first-optimization-plan/
 2. 删除旧布局设想的主线地位
 3. 明确当前结论只是代理任务结论
 
-### P1. 特征扩展
+### P1. 特征增益验证与剩余字段补齐
 
-1. 接入 fault subtype 比例特征
-2. 接入 mm syscall 密度特征
-3. 接入 warmup/steady-state 分段特征
+1. 对当前已接入的 fault subtype / mm syscall / warmup-stage 特征做分组消融
+2. 只对尚未进入主输入的剩余字段继续补列
+3. 保持 `feature_columns.py`、scaler 和模型输入定义一致
 
 ### P2. 实验收束
 
@@ -283,20 +283,21 @@ dataset-first-optimization-plan/
 如果现在继续推进，推荐顺序如下：
 
 1. 先改 `build_run_features.py`，把现有未用字段接进来。
-2. 重建 `run_features`、`pairs`、`anchor_set`。
-3. 统一跑线性、MLP、Transformer 的 held-out 实验。
-4. 用独立 fixed-work timing 或 `time_per_iter` 对照集验证最终单程序评分。
-5. 单独分析 `O1-O2` 和 `O2-O3` 这些难 pair。
-6. 把热点窗口和热点实体自动挂到单程序评分报告里。
-7. 只有这些都做完，再讨论是否值得扩数据集。
+2. 先固定当前 53 维主输入并做分组消融，确认第一轮扩展是否真的带来增益。
+3. 如确有缺口，再补剩余字段并重建 `run_features`、`pairs`、`anchor_set`。
+4. 统一跑线性、MLP、Transformer 的 held-out 实验。
+5. 用独立 fixed-work timing 或 `time_per_iter` 对照集验证最终单程序评分。
+6. 单独分析 `O1-O2` 和 `O2-O3` 这些难 pair。
+7. 把热点窗口和热点实体自动挂到单程序评分报告里。
+8. 只有这些都做完，再讨论是否值得扩数据集。
 
 ## 6. 可执行 TODO
 
 下面这 5 项不是方向性建议，而是可以直接排进开发计划、逐项验收的实现任务。
 
-### TODO 1. 扩展运行级特征并收敛特征列定义
+### TODO 1. 补剩余运行级特征并继续收敛特征列定义
 
-目标：把当前 `window_metrics.jsonl` 里还没进入模型的关键信号接入 `run_features`，并结束 `NON_TIME_COLS` 在多个脚本里重复拷贝的状态。
+目标：在当前 53 维主输入已经落地的前提下，只补剩余高价值字段，并继续保持特征列定义单一权威来源。
 
 涉及文件：
 
@@ -305,27 +306,26 @@ dataset-first-optimization-plan/
 3. `scripts/build_anchor_set.py`
 4. `scripts/train_transformer.py`
 5. `scripts/score_program.py`
-6. 新增一个共享特征配置模块，例如 `scripts/feature_columns.py`
+6. `scripts/feature_columns.py`
 
 具体改动：
 
-1. 在 `build_run_features.py` 中增加 fault subtype 比例特征：`anon_fault_ratio`、`file_fault_ratio`、`write_fault_ratio`、`instruction_fault_ratio`、`private_fault_ratio`。
-2. 增加 mm syscall 强度特征：`mmap_calls_per_ms`、`munmap_calls_per_ms`、`mprotect_calls_per_ms`、`brk_calls_per_ms`、以及主要 `*_bytes` 的归一化版本。
-3. 增加 warmup / steady-state 分段特征，例如前 5 个窗口和后 5 个窗口的 IPC、fault、LLC MPKI 均值。
-4. 把 `NON_TIME_COLS` 从各脚本中抽出来，统一由一个共享模块维护，避免后续每加一列就改 5 到 6 个文件。
+1. 在当前已接入 `anon/file/write/instruction fault ratio`、mm syscall 密度和 warmup / steady-state 比值的基础上，只补剩余高价值字段，例如 `private_fault_ratio`、更细的 mm bytes 或显式 `mprotect` 密度。
+2. 先做分组消融，明确 fault / mm / stage 三组特征的边际收益，再决定哪些剩余字段值得进入主输入。
+3. 继续以 `feature_columns.py` 作为唯一权威来源，避免后续每加一列就改 5 到 6 个文件。
 
 建议命令：
 
 ```bash
-.venv/bin/python scripts/build_run_features.py
+.venv/bin/python scripts/build_run_features.py --manifest-prefix manifest_curated
 .venv/bin/python scripts/build_pair_table.py
 .venv/bin/python scripts/build_anchor_set.py
 ```
 
 完成标准：
 
-1. `run_features.parquet` 和 `run_features_zscore.parquet` 能稳定产出。
-2. 新特征列已经进入 pair、anchor、训练和评分主链路。
+1. 能明确回答当前第一轮扩展特征是否真的带来增益。
+2. 若新增剩余字段，它们已经进入 pair、anchor、训练和评分主链路。
 3. 特征列定义只保留一个权威来源，不再在多个脚本里手工同步。
 
 ### TODO 2. 补统一评估脚本
@@ -361,17 +361,17 @@ dataset-first-optimization-plan/
 3. 单程序评分既能看 proxy 结果，也能看时间评分验证结果。
 4. 文档里的模型结论可以直接引用 `eval_summary.md`。
 
-### TODO 2.5. 补时间评分验证闭环
+### TODO 2.5. 加固时间评分验证闭环
 
 目标：为单程序评分建立独立于训练 proxy label 的最终验收口径，防止“分数看起来合理，但和真实时间收益脱节”。
 
 涉及文件：
 
-1. 新增 `scripts/build_time_score_table.py`
-2. 新增 `scripts/evaluate_score_vs_time.py`
+1. `scripts/build_time_score_table.py`
+2. `scripts/evaluate_score_vs_time.py`
 3. `train_set/scores.parquet`
-4. 新增 `train_set/time_scores.parquet`
-5. 新增 `train_set/score_time_eval.json`
+4. `train_set/time_scores.parquet`
+5. `train_set/score_time_eval.json`
 
 具体改动：
 

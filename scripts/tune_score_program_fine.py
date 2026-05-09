@@ -70,12 +70,12 @@ from score_program import (  # noqa: E402
 
 
 FINE_GRID: dict[str, list[float]] = {
-    "tie_gate_threshold": [0.50, 0.55, 0.60],
-    "tie_shrink_power": [0.75, 1.00, 1.25],
-    "tie_margin_weight_alpha": [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50],
-    "min_anchor_quality": [DEFAULT_MIN_ANCHOR_QUALITY],
-    "anchor_outlier_mad_scale": [DEFAULT_OUTLIER_MAD_SCALE],
-    "anchor_outlier_min_delta": [DEFAULT_OUTLIER_MIN_DELTA],
+    "tie_gate_threshold": [0.48, 0.50, 0.55, 0.60, 0.62],
+    "tie_shrink_power": [0.65, 0.75, 0.85, 1.00, 1.25],
+    "tie_margin_weight_alpha": [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55],
+    "min_anchor_quality": [0.25, DEFAULT_MIN_ANCHOR_QUALITY, 0.35],
+    "anchor_outlier_mad_scale": [2.5, DEFAULT_OUTLIER_MAD_SCALE, 3.5],
+    "anchor_outlier_min_delta": [0.30, DEFAULT_OUTLIER_MIN_DELTA, 0.40],
 }
 
 

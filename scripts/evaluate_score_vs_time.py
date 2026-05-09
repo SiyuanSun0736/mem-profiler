@@ -17,6 +17,10 @@ evaluate_score_vs_time.py — 模型分数对时间评分的外部验证
     若 time_scores.parquet 同时提供 `score_time_loose` 与严格 `score_time`，
     则同时输出过滤前后对照指标，直接观察时间真值过滤是否提升一致性。
 
+4. repeat-backed only 子集
+    若严格 `score_time` 中有一部分来自 repeat_timing sidecar，
+    则额外输出该子集的单独统计，观察更强时间真值上的表现。
+
 指标
 ----
   mae_proxy_time    : MAE( score_gt,  score_time )
@@ -182,6 +186,33 @@ def _build_metrics_block(df: pd.DataFrame, time_col: str) -> dict[str, float]:
     }
 
 
+def _build_optional_metrics_block(df: pd.DataFrame, time_col: str) -> dict[str, float | int | None]:
+    block: dict[str, float | int | None] = {"n": int(len(df))}
+    metric_keys = [
+        "mae_proxy_time",
+        "corr_proxy_time",
+        "spearman_proxy",
+        "dir_acc_proxy",
+        "band_acc_proxy",
+        "mae_model_time",
+        "corr_model_time",
+        "spearman_model",
+        "dir_acc_model",
+        "band_acc_model",
+        "score_time_mean",
+        "score_time_std",
+        "ref_min_gt",
+        "ref_max_gt",
+    ]
+    if len(df) < 2:
+        for key in metric_keys:
+            block[key] = None
+        return block
+
+    block.update(_build_metrics_block(df, time_col))
+    return block
+
+
 def main() -> None:
     args = parse_args()
     scores_path = pathlib.Path(args.scores)
@@ -208,6 +239,7 @@ def main() -> None:
         "program",
         "variant",
         "score_time",
+        "score_time_source",
         "time_per_iter",
         "active_pid_count",
         "active_window_ratio",
@@ -223,6 +255,9 @@ def main() -> None:
         on=["program", "variant"],
         how="inner",
     )
+    if "score_time_source" not in merged.columns:
+        merged["score_time_source"] = ""
+        merged.loc[merged["score_time"].notna(), "score_time_source"] = "proxy_strict"
 
     loose_time_col = "score_time_loose" if "score_time_loose" in merged.columns else "score_time"
     merged_loose = merged.dropna(subset=[loose_time_col, "score_log", "score_gt"]).copy()
@@ -278,6 +313,8 @@ def main() -> None:
 
     strict_metrics = _build_metrics_block(merged_clean, "score_time")
     loose_metrics = _build_metrics_block(merged_loose, loose_time_col)
+    repeat_backed = merged_clean[merged_clean["score_time_source"] == "repeat_timing"].copy()
+    repeat_backed_metrics = _build_optional_metrics_block(repeat_backed, "score_time")
 
     results: dict[str, object] = {
         "n_valid": n_valid,
@@ -291,6 +328,10 @@ def main() -> None:
         "strict_filter": {
             "n_excluded_from_loose": n_excluded,
             "reasons": strict_reason_counts,
+        },
+        "preferred_source_counts": {
+            str(source or "unknown"): int(count)
+            for source, count in merged_clean["score_time_source"].value_counts(dropna=False).items()
         },
         # ── strict 主统计 ────────────────────────────────────────────────
         "mae_proxy_time": strict_metrics["mae_proxy_time"],
@@ -324,6 +365,7 @@ def main() -> None:
             "score_time_mean": loose_metrics["score_time_mean"],
             "score_time_std": loose_metrics["score_time_std"],
         },
+        "repeat_backed_only": repeat_backed_metrics,
     }
 
     # ── 打印摘要 ───────────────────────────────────────────────────────────────
@@ -351,11 +393,22 @@ def main() -> None:
     print(
         f"    reasons       = {results['strict_filter']['reasons']}",
     )
+    print(
+        f"    sources       = {results['preferred_source_counts']}",
+    )
     print()
     uf = results["unfiltered"]
     print("  loose 对照（过滤前）:")
     print(f"    proxy: corr={uf['corr_proxy_time']:.4f}  spearman={uf['spearman_proxy']:.4f}")
     print(f"    model: corr={uf['corr_model_time']:.4f}  spearman={uf['spearman_model']:.4f}")
+    print()
+    rb = results["repeat_backed_only"]
+    print(f"  repeat-backed 子集: n={rb['n']}")
+    if rb["corr_model_time"] is None:
+        print("    样本不足，跳过相关性统计")
+    else:
+        print(f"    proxy: corr={rb['corr_proxy_time']:.4f}  spearman={rb['spearman_proxy']:.4f}")
+        print(f"    model: corr={rb['corr_model_time']:.4f}  spearman={rb['spearman_model']:.4f}")
     print("═" * 58)
 
     # ── 写入文件 ───────────────────────────────────────────────────────────────

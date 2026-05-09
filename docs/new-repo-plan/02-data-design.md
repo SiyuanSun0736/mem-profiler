@@ -11,9 +11,9 @@
 基于 `manifest_bcc_*.jsonl`、目录结构和样本 JSONL，可以确认下面这些事实：
 
 1. 原始数据根目录是 `data/llvm_test_suite/bcc/O0~O3`。
-2. 当前 raw manifest 条数分别是：`O0=283`、`O1=145`、`O2=145`、`O3=145`。
-3. `O0` manifest 虽然仍然只覆盖 145 个 unique program，但包含大量重复 program 记录，说明当前 `O0` 目录不是“每个 program 只保留一条”的冻结视图。
-4. 至少有 1 条 `O0` manifest 记录指向缺失输出目录 `BitBench_uudecode_20260426_223145`，因此当前 raw manifest 也不是完全自洽的最终训练输入。
+2. 当前 `manifest_bcc_O0~O3.jsonl` 已在采集收尾自动去重后收敛为 `145/145/145/145`。
+3. 当前采集脚本会在单 variant 收尾阶段自动调用 `dedup_dataset_variant.py`，按 `valid -> total_samples -> window_lines -> completion_count` 规则去重，并重写单 variant manifest。
+4. 如需进一步冻结一版更严格的训练快照，可以再由 `freeze_curated_manifest.py` 生成 `manifest_curated_O0~O3.jsonl`；当前 full/curated 账本都应视为 `145 x 4` clean ledger，而不再继续沿用更早一轮重复 raw manifest 的旧口径。
 5. 单次 raw run 目录至少包含两类文件：`run_metadata.jsonl` 和 `window_metrics.jsonl`。从真实样本可以看到，`run_metadata.jsonl` 已记录 `enabled_probes`、`host_info`、`aggregation_scope` 以及 `collection_backend=hybrid_perf_event_open_bcc`。
 6. 当前 raw run 仍然是单机、约 60 秒观测、1.0 秒窗口、按 PID 聚合，没有 repeat 和多机维度。
 
@@ -21,18 +21,19 @@
 
 基于 `train_set/pairs_stats.json`、`train_set/anchor_set.stats.json` 和 `train_set/feature_scaler.json`，可以确认当前训练闭环使用的是另一个冻结视图：
 
-1. 145 个 program。
-2. 580 条运行级记录，也就是每个 program 保留 4 个 variant。
-3. 1740 条 pair。
-4. 290 条 anchor。
-5. 现有模型评估、pair 统计和单程序评分结果都基于这个冻结训练快照，而不是直接基于最新 raw manifest 即时重建。
-6. `train_set/run_features.csv` 中保存的 `output_dir` 指向更早一轮 2026-04-23 采集路径，因此现有训练产物与当前附带的 2026-04-26/27 raw 目录不是同一批 snapshot。
+1. full/curated 账本覆盖 145 个 program。
+2. full/curated 账本共有 580 条运行级记录，也就是每个 program 保留 4 个 variant。
+3. `build_run_features.py` 默认会在特征构建阶段做语义过滤，当前保留 509 条运行级样本。
+4. 当前 `pairs.parquet` 有 1494 条 pair。
+5. 当前 `anchor_set.parquet` 有 374 条 anchor。
+6. 现有模型评估、pair 统计和单程序评分结果，默认都基于这个“580 条账本 -> 509 条训练子集”的过滤后闭环，而不是旧版重复 manifest 或未过滤全量账本。
+7. 当前 `run_features` 与 `output_dir` 口径已经和现有 curated manifests 对齐；账本层与训练层的差异，主要来自语义过滤而不是“更早一轮 snapshot 混用”。
 
 ### 1.3 这对建模意味着什么
 
-1. 第一阶段建模对象应该继续定义为“冻结训练快照上的单次运行、单机、程序内相对比较”。
-2. 如果要用最新 raw data 重建 `train_set`，必须先显式冻结 snapshot 或增加去重/选优规则；当前 `build_run_features.py` 只是顺序遍历 manifest，不会自动去重。
-3. 因此本阶段的主要变量应继续放在特征工程和验证，而不是假设 raw 采集层已经天然等价于 `145 x 4` clean dataset。
+1. 第一阶段建模对象应明确为“过滤后训练子集上的单次运行、单机、程序内相对比较”，而不是未过滤账本全量样本。
+2. 如果要从当前 manifests 重建 `train_set`，默认链路应是 `manifest_curated -> build_run_features 语义过滤 -> pairs / anchor_set`，而不再是假设 manifests 自带重复样本和缺失目录。
+3. 因此本阶段的主要变量应继续放在特征增益验证、质量过滤和时间外部验证，而不是继续讨论账本层是否天然等价于 `145 x 4` clean dataset。
 
 ## 2. 原始文件层
 
@@ -91,7 +92,7 @@
 2. `lbr_samples`
 3. `lbr_entries`
 
-需要强调的是：当前训练脚本只消费了其中一部分字段，说明“可扩展空间”主要在特征工程，不在数据协议或采集层。
+需要强调的是：当前训练链路已经消费了其中相当一部分字段，包括 fault subtype 子集、mm syscall 密度和 warmup / steady-state 阶段特征；但还没有吃尽所有原始字段，因此“可扩展空间”仍主要在特征工程，不在数据协议或采集层。
 
 ## 4. 建模样本单位
 
@@ -132,7 +133,7 @@
 一条样本对应：
 
 1. 一个 `program`
-2. 一个锚点变体，目前是 `O0` 和 `O3`
+2. 一个锚点变体，当前默认是 `O0`、`O2` 和 `O3`
 3. 一个相对基线的分数 `score_gt`
 
 这层专门服务单程序评分。
@@ -168,12 +169,15 @@
 
 ## 6. 当前运行级特征设计
 
-当前 `build_run_features.py` 已经构造了 38 个 non-time 特征，主要分成四类：
+当前 `build_run_features.py` 会生成一份更宽的运行级账本，而当前模型实际输入由 `feature_columns.py` 统一定义为 53 维 non-time 特征。需要注意的是：`minor_fault_ratio` 仍保留在 `run_features` 账本里，但因零方差已从模型输入中剔除。
+
+当前 53 维主输入主要分成五类：
 
 1. 效率指标：`ipc`、`cpi`
 2. LLC / dTLB / iTLB miss 率与 MPKI
-3. page fault 强度与样本密度
+3. page fault 强度、fault subtype 子集与 mm syscall 密度
 4. 窗口分布统计：均值、标准差、P95、峰值份额、最小值
+5. warmup / steady-state 阶段特征与阶段比值
 
 这套设计的优点是：
 
@@ -183,37 +187,32 @@
 
 它的局限也很清楚：
 
-1. 还没有使用 fault 子类型字段。
-2. 还没有使用 mmap / munmap / brk 等系统调用字段。
-3. 还没有把“冷启动窗口”和“稳态窗口”拆开建特征。
+1. fault 结构还没完全吃尽，例如 `private_fault_ratio`、`shared_fault_ratio` 仍未进入主输入。
+2. mm syscall 字节类特征仍然较薄，目前只保留了聚合密度和 `mmap_bytes_per_ms` 这一类代表量。
+3. 阶段特征目前仍以 warmup / steady-state 比值为主，还没有显式纳入峰值窗口位置、热点窗口占比和 PID 集中度等更细粒度阶段信号。
 
-## 7. 不重采数据也能立刻扩展的特征
+## 7. 不重采数据也能继续扩展的特征
 
-基于现有原始 JSONL，下一轮最值得补的特征不是更多模型，而是更多派生量。
+基于现有原始 JSONL，下一轮最值得补的不是更大的 backbone，而是剩余字段和分组消融。
 
 ### 7.1 fault 结构特征
 
-1. `anon_fault_ratio`
-2. `file_fault_ratio`
-3. `write_fault_ratio`
-4. `instruction_fault_ratio`
-5. `private_fault_ratio`
+1. `private_fault_ratio`
+2. `shared_fault_ratio`
+3. 更细的 write / instruction / file / anon 组合特征或差值特征
 
 ### 7.2 内存系统调用强度特征
 
-1. `mmap_calls_per_ms`
-2. `munmap_calls_per_ms`
-3. `mprotect_calls_per_ms`
-4. `brk_calls_per_ms`
-5. 各类 `*_bytes_per_ki`
+1. 显式 `mprotect_per_ms`
+2. 更多 `*_bytes_per_ms` 或 `*_bytes_per_ki`
+3. `brk_growth_bytes` / `brk_shrink_bytes` 的归一化版本
 
 ### 7.3 阶段性窗口特征
 
-1. 前 5 个窗口均值
-2. 后 5 个窗口均值
-3. 峰值窗口位置
-4. 热点窗口占比
-5. 活跃 PID 集中度
+1. 峰值窗口位置
+2. 热点窗口占比
+3. 活跃 PID 集中度
+4. 前后固定窗口均值或更细的 phase bucket 特征
 
 这些特征都可以在不改采集代码的情况下直接从现有数据中派生出来。
 
@@ -239,6 +238,8 @@
 6. 评分输出 `scores.parquet`
 
 在当前这批数据上，这第一步不是形式主义。因为最新 `O0` raw manifest 仍然包含重复采样和缺失目录，不先冻结 run list，后续统计就不具备可复现性。
+
+在当前这批数据上，这一步依然不是形式主义。虽然 `manifest_bcc_*` 已在采集收尾自动去重、`manifest_curated_*` 也可以进一步冻结账本，但训练结果默认还要经过语义过滤；如果不把“full/curated 账本”和“过滤后训练子集”这两层分开写清楚，后续统计同样不具备可复现性。
 
 窗口级原始数据不再承担“协议层”的职责，而只承担两类工作：
 

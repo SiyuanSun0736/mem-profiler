@@ -188,7 +188,8 @@ train_set/pairs.parquet
 当前默认锚点是：
 
 1. `O0`：baseline
-2. `O3`：reference
+2. `O2`：intermediate reference
+3. `O3`：strong reference
 
 输出文件是：
 
@@ -254,7 +255,7 @@ train_set/anchor_set.parquet
 3. 用训练好的 PairTransformer 预测 `model(query, anchor)`。
 4. 把预测的 pairwise log-ratio 加到锚点真值 `score_gt` 上，得到单程序分数估计。
 
-[scripts/score_program.py](../../scripts/score_program.py) 现在还会在默认路径下自动读取 [train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json)。默认优先级是：`CLI 显式传参 > 当前 variant tuned best > ALL tuned best > 代码硬编码默认值`。
+[scripts/score_program.py](../../scripts/score_program.py) 现在还会在默认路径下自动读取 [train_set/score_tune_fine_variant_best.json](../../train_set/score_tune_fine_variant_best.json)。默认优先级是：`CLI 显式传参 > 当前 variant tuned best > ALL tuned best > 代码硬编码默认值`。当前默认选择的是 score-first tuned 参数；如果更看重 strict 时间外部验证，可显式传 `--tuned-selection-objective time`。
 
 ### Step 8.5 可选：只调评分层，不重训模型
 
@@ -267,8 +268,8 @@ train_set/anchor_set.parquet
 这一步会：
 
 1. 先缓存 query-anchor 的原始 pair 预测。
-2. 再对 `tie_gate_threshold / tie_shrink_power / tie_margin_weight_alpha` 做细粒度搜索。
-3. 按 query variant 分开输出最优组合到 `train_set/score_tune_fine_variant_best.json`。
+2. 再对 `tie_gate_threshold / tie_shrink_power / tie_margin_weight_alpha / min_anchor_quality / anchor_outlier_*` 做细粒度搜索。
+3. 按 query variant 分开输出 `score-first` 与 `time-first` 两套最优组合到 `train_set/score_tune_fine_variant_best.json`。
 
 调参完成后，再次执行 [scripts/score_program.py](../../scripts/score_program.py) 即可自动回放这份 per-variant 默认值：
 
