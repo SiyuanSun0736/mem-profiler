@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import pathlib
 import statistics
 import subprocess
@@ -43,6 +44,7 @@ from typing import Any
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_DATA_ROOT = REPO_ROOT / "data" / "llvm_test_suite"
 DEFAULT_OUTPUT_NAME = "repeat_timing.json"
+DEFAULT_FALLBACK_SIDECAR_ROOT = DEFAULT_DATA_ROOT / "repeat_timing_sidecars"
 DEFAULT_WARMUP_COUNT = 3
 DEFAULT_REPEAT_COUNT = 11
 DEFAULT_TIMEOUT_SEC = 300.0
@@ -65,6 +67,11 @@ def parse_args() -> argparse.Namespace:
         "--output-name",
         default=DEFAULT_OUTPUT_NAME,
         help="写入每个 output_dir 的 sidecar 文件名",
+    )
+    parser.add_argument(
+        "--fallback-sidecar-root",
+        default=str(DEFAULT_FALLBACK_SIDECAR_ROOT),
+        help="当 output_dir 不可写时，将 sidecar 镜像写入该根目录；目录结构保持与 data/llvm_test_suite 下的 output_dir 一致",
     )
     parser.add_argument(
         "--program",
@@ -127,6 +134,56 @@ def _relative_to_repo(path: pathlib.Path) -> str:
         return str(path.resolve().relative_to(REPO_ROOT))
     except ValueError:
         return str(path.resolve())
+
+
+def _nearest_existing_parent(path: pathlib.Path) -> pathlib.Path | None:
+    current = path
+    while not current.exists():
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+    return current if current.is_dir() else current.parent
+
+
+def _can_write_target(path: pathlib.Path) -> bool:
+    if path.exists():
+        return os.access(path, os.W_OK)
+    parent = _nearest_existing_parent(path.parent)
+    return parent is not None and os.access(parent, os.W_OK)
+
+
+def _sidecar_subpath(output_dir: pathlib.Path, data_root: pathlib.Path) -> pathlib.Path:
+    resolved_output_dir = output_dir.resolve()
+    resolved_data_root = data_root.resolve()
+
+    try:
+        return resolved_output_dir.relative_to(resolved_data_root)
+    except ValueError:
+        pass
+
+    try:
+        return resolved_output_dir.relative_to(REPO_ROOT)
+    except ValueError:
+        pass
+
+    anchor = ("data", "llvm_test_suite")
+    parts = resolved_output_dir.parts
+    for index in range(len(parts) - len(anchor) + 1):
+        if parts[index:index + len(anchor)] == anchor:
+            return pathlib.Path(*parts[index + len(anchor):])
+
+    sanitized_parts = [part for part in parts if part and part != resolved_output_dir.anchor]
+    return pathlib.Path("external", *sanitized_parts)
+
+
+def _fallback_sidecar_path(
+    output_dir: pathlib.Path,
+    output_name: str,
+    data_root: pathlib.Path,
+    fallback_sidecar_root: pathlib.Path,
+) -> pathlib.Path:
+    return fallback_sidecar_root / _sidecar_subpath(output_dir, data_root) / output_name
 
 
 def _load_jsonl(path: pathlib.Path) -> list[dict[str, Any]]:
@@ -223,6 +280,8 @@ def _build_sidecar_payload(
     failure_count: int,
     timeout_count: int,
     warmup_failures: int,
+    sidecar_path: pathlib.Path,
+    sidecar_storage: str,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
     median_wall_time_sec = float(statistics.median(timings_sec)) if timings_sec else float("nan")
@@ -252,6 +311,8 @@ def _build_sidecar_payload(
         "manifest_path": _relative_to_repo(_resolve_path(str(entry["_manifest_path"]))),
         "test_file": _relative_to_repo(test_file),
         "output_dir": _relative_to_repo(output_dir),
+        "sidecar_path": _relative_to_repo(sidecar_path),
+        "sidecar_storage": sidecar_storage,
         "cwd": _relative_to_repo(test_file.parent),
         "run_cmd": str(entry.get("run_cmd", "")),
         "warmup_count": int(args.warmup_count),
@@ -274,6 +335,8 @@ def _build_sidecar_payload(
 
 def main() -> None:
     args = parse_args()
+    data_root = _resolve_path(str(args.data_root))
+    fallback_sidecar_root = _resolve_path(str(args.fallback_sidecar_root))
     entries = _select_entries(args)
     if not entries:
         print("[warn] 没有匹配到任何 manifest 记录", file=sys.stderr)
@@ -288,6 +351,7 @@ def main() -> None:
     success_entries = 0
     skipped_entries = 0
     invalid_entries = 0
+    fallback_entries = 0
 
     for index, entry in enumerate(entries, start=1):
         program = str(entry["program"])
@@ -295,7 +359,13 @@ def main() -> None:
         run_cmd = str(entry.get("run_cmd", "")).strip()
         test_file = _resolve_path(str(entry["test_file"]))
         output_dir = _resolve_path(str(entry["output_dir"]))
-        sidecar_path = output_dir / args.output_name
+        primary_sidecar_path = output_dir / args.output_name
+        fallback_sidecar_path = _fallback_sidecar_path(
+            output_dir,
+            args.output_name,
+            data_root=data_root,
+            fallback_sidecar_root=fallback_sidecar_root,
+        )
 
         if not run_cmd:
             print(f"[warn] [{index}/{len(entries)}] {variant}/{program}: 缺少 run_cmd，跳过", flush=True)
@@ -312,12 +382,35 @@ def main() -> None:
             invalid_entries += 1
             continue
 
-        if sidecar_path.exists() and not args.overwrite:
-            print(f"[skip] [{index}/{len(entries)}] {variant}/{program}: 已存在 {args.output_name}", flush=True)
+        existing_sidecar_path = None
+        if primary_sidecar_path.exists():
+            existing_sidecar_path = primary_sidecar_path
+        elif fallback_sidecar_path.exists():
+            existing_sidecar_path = fallback_sidecar_path
+
+        if existing_sidecar_path is not None and not args.overwrite:
+            print(
+                f"[skip] [{index}/{len(entries)}] {variant}/{program}: 已存在 {_relative_to_repo(existing_sidecar_path)}",
+                flush=True,
+            )
             skipped_entries += 1
             continue
 
-        print(f"[info] [{index}/{len(entries)}] {variant}/{program} -> {_relative_to_repo(sidecar_path)}", flush=True)
+        sidecar_path = primary_sidecar_path
+        sidecar_storage = "output_dir"
+        if not _can_write_target(primary_sidecar_path):
+            sidecar_path = fallback_sidecar_path
+            sidecar_storage = "fallback_sidecar_root"
+
+        print(
+            f"[info] [{index}/{len(entries)}] {variant}/{program} -> {_relative_to_repo(sidecar_path)}",
+            flush=True,
+        )
+        if sidecar_storage == "fallback_sidecar_root":
+            print(
+                f"       output_dir 不可写，已回退到 {_relative_to_repo(fallback_sidecar_root)}",
+                flush=True,
+            )
         if args.dry_run:
             print(f"       cwd={_relative_to_repo(test_file.parent)}", flush=True)
             print(f"       cmd={run_cmd}", flush=True)
@@ -347,9 +440,29 @@ def main() -> None:
             failure_count=failure_count,
             timeout_count=timeout_count,
             warmup_failures=warmup_failures,
+            sidecar_path=sidecar_path,
+            sidecar_storage=sidecar_storage,
             args=args,
         )
-        sidecar_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        try:
+            sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+            sidecar_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        except PermissionError:
+            if sidecar_path == fallback_sidecar_path:
+                raise
+            sidecar_path = fallback_sidecar_path
+            sidecar_storage = "fallback_sidecar_root"
+            payload["sidecar_path"] = _relative_to_repo(sidecar_path)
+            payload["sidecar_storage"] = sidecar_storage
+            sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+            sidecar_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            print(
+                f"[warn] output_dir 写入失败，已回退到 {_relative_to_repo(sidecar_path)}",
+                flush=True,
+            )
+
+        if sidecar_storage == "fallback_sidecar_root":
+            fallback_entries += 1
 
         if payload["valid"]:
             success_entries += 1
@@ -373,6 +486,7 @@ def main() -> None:
     print(f"  valid   : {success_entries}")
     print(f"  skipped : {skipped_entries}")
     print(f"  invalid : {invalid_entries}")
+    print(f"  fallback: {fallback_entries}")
     print("=" * 58)
 
     if invalid_entries > 0 and not args.dry_run:

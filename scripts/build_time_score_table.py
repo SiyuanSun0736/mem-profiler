@@ -47,9 +47,11 @@ import pandas as pd
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 BASELINE_VARIANT = "O0"
+DEFAULT_DATA_ROOT = REPO_ROOT / "data" / "llvm_test_suite"
 DEFAULT_MIN_ACTIVE_PIDS = 5
 DEFAULT_MIN_ACTIVE_WINDOW_RATIO = 0.10
 DEFAULT_REPEAT_TIMING_NAME = "repeat_timing.json"
+DEFAULT_REPEAT_SIDECAR_ROOT = DEFAULT_DATA_ROOT / "repeat_timing_sidecars"
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,6 +92,11 @@ def parse_args() -> argparse.Namespace:
         "--repeat-timing-name",
         default=DEFAULT_REPEAT_TIMING_NAME,
         help="若 output_dir 下存在该 sidecar，则优先使用 repeat timing 中位数 wall time",
+    )
+    p.add_argument(
+        "--repeat-sidecar-root",
+        default=str(DEFAULT_REPEAT_SIDECAR_ROOT),
+        help="collect_repeat_timing.py 在 output_dir 不可写时会将 sidecar 镜像写到该根目录，本脚本也会在此处查找",
     )
     return p.parse_args()
 
@@ -139,27 +146,107 @@ def _empty_repeat_timing_info() -> dict[str, object]:
     }
 
 
-def _load_repeat_timing_info(output_dir: object, repeat_timing_name: str) -> dict[str, object]:
-    info = _empty_repeat_timing_info()
+def _relative_to_repo(path: pathlib.Path) -> str:
+    try:
+        return str(path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path.resolve())
+
+
+def _remap_output_dir_to_repo(path: pathlib.Path) -> pathlib.Path | None:
+    anchor = ("data", "llvm_test_suite")
+    parts = path.parts
+    for index in range(len(parts) - len(anchor) + 1):
+        if parts[index:index + len(anchor)] == anchor:
+            return (DEFAULT_DATA_ROOT / pathlib.Path(*parts[index + len(anchor):])).resolve()
+    return None
+
+
+def _sidecar_subpath(output_dir: pathlib.Path) -> pathlib.Path:
+    resolved_output_dir = output_dir.resolve()
+
+    try:
+        return resolved_output_dir.relative_to(DEFAULT_DATA_ROOT.resolve())
+    except ValueError:
+        pass
+
+    try:
+        return resolved_output_dir.relative_to(REPO_ROOT)
+    except ValueError:
+        pass
+
+    remapped = _remap_output_dir_to_repo(resolved_output_dir)
+    if remapped is not None:
+        try:
+            return remapped.relative_to(DEFAULT_DATA_ROOT.resolve())
+        except ValueError:
+            pass
+
+    anchor = ("data", "llvm_test_suite")
+    parts = resolved_output_dir.parts
+    for index in range(len(parts) - len(anchor) + 1):
+        if parts[index:index + len(anchor)] == anchor:
+            return pathlib.Path(*parts[index + len(anchor):])
+
+    sanitized_parts = [part for part in parts if part and part != resolved_output_dir.anchor]
+    return pathlib.Path("external", *sanitized_parts)
+
+
+def _candidate_repeat_paths(
+    output_dir: object,
+    repeat_timing_name: str,
+    repeat_sidecar_root: pathlib.Path,
+) -> list[pathlib.Path]:
     if output_dir is None:
-        return info
+        return []
 
     raw_output_dir = str(output_dir).strip()
     if not raw_output_dir:
-        return info
+        return []
 
-    resolved_output_dir = pathlib.Path(raw_output_dir)
-    if not resolved_output_dir.is_absolute():
-        resolved_output_dir = REPO_ROOT / resolved_output_dir
-    repeat_path = resolved_output_dir / repeat_timing_name
-    if not repeat_path.exists():
+    path = pathlib.Path(raw_output_dir)
+    candidate_dirs: list[pathlib.Path] = []
+    if path.is_absolute():
+        candidate_dirs.append(path)
+    else:
+        candidate_dirs.append((REPO_ROOT / path).resolve())
+
+    remapped = _remap_output_dir_to_repo(path)
+    if remapped is not None:
+        candidate_dirs.append(remapped)
+
+    candidates: list[pathlib.Path] = []
+    seen: set[str] = set()
+    for candidate_dir in candidate_dirs:
+        direct_path = candidate_dir / repeat_timing_name
+        direct_key = str(direct_path)
+        if direct_key not in seen:
+            candidates.append(direct_path)
+            seen.add(direct_key)
+
+        mirror_path = repeat_sidecar_root / _sidecar_subpath(candidate_dir) / repeat_timing_name
+        mirror_key = str(mirror_path)
+        if mirror_key not in seen:
+            candidates.append(mirror_path)
+            seen.add(mirror_key)
+    return candidates
+
+
+def _load_repeat_timing_info(
+    output_dir: object,
+    repeat_timing_name: str,
+    repeat_sidecar_root: pathlib.Path,
+) -> dict[str, object]:
+    info = _empty_repeat_timing_info()
+    repeat_path = next(
+        (candidate for candidate in _candidate_repeat_paths(output_dir, repeat_timing_name, repeat_sidecar_root) if candidate.exists()),
+        None,
+    )
+    if repeat_path is None:
         return info
 
     info["repeat_timing_available"] = True
-    try:
-        info["repeat_timing_path"] = str(repeat_path.resolve().relative_to(REPO_ROOT))
-    except ValueError:
-        info["repeat_timing_path"] = str(repeat_path.resolve())
+    info["repeat_timing_path"] = _relative_to_repo(repeat_path)
 
     try:
         payload = json.loads(repeat_path.read_text(encoding="utf-8"))
@@ -191,6 +278,7 @@ def build_time_scores(
     min_active_pids: int,
     min_active_window_ratio: float,
     repeat_timing_name: str,
+    repeat_sidecar_root: pathlib.Path,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     required = {"program", "variant", "wall_time_sec", "active_pid_count"}
     missing = required - set(rf.columns)
@@ -217,7 +305,7 @@ def build_time_scores(
     if "output_dir" in rf.columns:
         output_dir_values = rf["output_dir"].fillna("").astype(str)
         repeat_infos = {
-            output_dir: _load_repeat_timing_info(output_dir, repeat_timing_name)
+            output_dir: _load_repeat_timing_info(output_dir, repeat_timing_name, repeat_sidecar_root)
             for output_dir in output_dir_values.unique()
         }
         repeat_df = pd.DataFrame(
@@ -314,6 +402,7 @@ def build_time_scores(
     summary: dict[str, object] = {
         "baseline": baseline,
         "repeat_timing_name": repeat_timing_name,
+        "repeat_sidecar_root": _relative_to_repo(repeat_sidecar_root),
         "min_active_pids": int(min_active_pids),
         "min_active_window_ratio": float(min_active_window_ratio),
         "active_window_ratio_available": bool(ratio_cols_present),
@@ -432,6 +521,7 @@ def main() -> None:
         min_active_pids=args.min_active_pids,
         min_active_window_ratio=args.min_active_window_ratio,
         repeat_timing_name=args.repeat_timing_name,
+        repeat_sidecar_root=pathlib.Path(args.repeat_sidecar_root).resolve(),
     )
 
     n_valid_loose = int(out["score_time_loose"].notna().sum())
