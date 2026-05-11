@@ -50,14 +50,14 @@ from score_program import _is_reliable_tuned_best  # noqa: E402
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="并排回放 score-first 与 time-first 两套评分口径，并生成对比页",
+        description="并排回放 score-first、time-first 与 time-aware 三套评分口径，并生成对比页",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--device", default=None, help="透传给 score_program.py 的 --device")
     parser.add_argument(
         "--compare-dir",
         default="train_set/objective_compare",
-        help="两套中间产物输出目录",
+        help="三套中间产物输出目录",
     )
     parser.add_argument(
         "--summary-json",
@@ -186,6 +186,33 @@ def _recommend_default(score_eval: dict[str, Any], score_time_eval: dict[str, An
     }
 
 
+def _time_aware_vs_score_first(
+    score_eval: dict[str, Any],
+    score_time_eval: dict[str, Any],
+    aware_eval: dict[str, Any],
+    aware_time_eval: dict[str, Any],
+) -> dict[str, Any]:
+    if not aware_eval or not aware_time_eval:
+        return {"available": False}
+
+    score_repeat = score_time_eval.get("repeat_backed_only") or {}
+    aware_repeat = aware_time_eval.get("repeat_backed_only") or {}
+    return {
+        "available": True,
+        "proxy_corr_delta": float(aware_eval["corr_score_log"]) - float(score_eval["corr_score_log"]),
+        "proxy_mae_delta": float(aware_eval["mae_score_log"]) - float(score_eval["mae_score_log"]),
+        "time_corr_delta": float(aware_time_eval["corr_model_time"]) - float(score_time_eval["corr_model_time"]),
+        "time_spearman_delta": float(aware_time_eval["spearman_model"]) - float(score_time_eval["spearman_model"]),
+        "time_mae_delta": float(aware_time_eval["mae_model_time"]) - float(score_time_eval["mae_model_time"]),
+        "time_band_delta": float(aware_time_eval["band_acc_model"]) - float(score_time_eval["band_acc_model"]),
+        "repeat_corr_delta": (
+            float(aware_repeat["corr_model_time"]) - float(score_repeat["corr_model_time"])
+            if "corr_model_time" in aware_repeat and "corr_model_time" in score_repeat
+            else None
+        ),
+    }
+
+
 def _write_markdown(
     path: pathlib.Path,
     summary: dict[str, Any],
@@ -216,15 +243,26 @@ def _write_markdown(
     lines.append("")
     for item in recommendation["reason"]:
         lines.append(f"- {item}")
+    aware_delta = summary.get("time_aware_vs_score_first") or {}
+    if aware_delta.get("available"):
+        lines.append("")
+        lines.append(
+            "time-aware 是可选的外部时间优先口径："
+            f"strict time Pearson 相对 score-first {_fmt_delta(aware_delta.get('time_corr_delta'), 'higher')}，"
+            f"MAE {_fmt_delta(aware_delta.get('time_mae_delta'), 'lower')}，"
+            f"repeat-backed Pearson {_fmt_delta(aware_delta.get('repeat_corr_delta'), 'higher')}；"
+            f"代价是 proxy Pearson {_fmt_delta(aware_delta.get('proxy_corr_delta'), 'higher')}。"
+        )
     lines.append("")
     lines.append("## 一页总表")
     lines.append("")
-    lines.append("| 指标 | score-first | time-first | time-aware | score-first - time-first | 更优口径 |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | --- |")
+    lines.append("| 指标 | score-first | time-first | time-aware | score-first - time-first | time-aware - score-first | score/time 更优 |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | --- |")
     for row in summary["metrics"]:
         aware_value = summary.get("time_aware_metrics", {}).get(row["metric"])
+        aware_minus_score = float(aware_value) - float(row["score_first"]) if aware_value is not None else None
         lines.append(
-            f"| {row['metric']} | {_fmt_num(row['score_first'])} | {_fmt_num(row['time_first'])} | {_fmt_num(aware_value) if aware_value is not None else '-'} | {_fmt_delta(row['delta_score_minus_time'], row['better'])} | {row['preferred']} |"
+            f"| {row['metric']} | {_fmt_num(row['score_first'])} | {_fmt_num(row['time_first'])} | {_fmt_num(aware_value) if aware_value is not None else '-'} | {_fmt_delta(row['delta_score_minus_time'], row['better'])} | {_fmt_delta(aware_minus_score, row['better'])} | {row['preferred']} |"
         )
     lines.append("")
     lines.append("## ALL 共享参数对比")
@@ -289,7 +327,7 @@ def _write_markdown(
     lines.append("## 解释")
     lines.append("")
     lines.append(
-        "score-first 看的是单程序评分对 proxy 真值的恢复能力；time-first 看的是 strict 时间外部验证。当前这两套口径的时间指标差距很小，但 score-first 在 proxy 侧更稳，因此默认更适合作为主线口径。"
+        "score-first 看的是单程序评分对 proxy 真值的恢复能力；time-first 看的是 strict 时间外部验证；time-aware 同时纳入 proxy、strict time、band 和 repeat-backed 子集。当前 score-first 仍更适合作为默认主线口径；若一次实验更看重真实时间外部一致性，可以显式切到 time-aware。"
     )
     lines.append("")
     lines.append("## 复现命令")
@@ -297,7 +335,6 @@ def _write_markdown(
     lines.append("```bash")
     lines.append("/home/ssy/mem-profiler/.venv/bin/python scripts/compare_selection_objectives.py --device cpu")
     lines.append("```")
-    lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -401,6 +438,12 @@ def main() -> None:
         "time.band_acc_model": aware_time_eval.get("band_acc_model"),
         "coverage.n_valid_strict": aware_time_eval.get("n_valid_strict"),
     }
+    summary["time_aware_vs_score_first"] = _time_aware_vs_score_first(
+        score_eval,
+        score_time_eval,
+        aware_eval,
+        aware_time_eval,
+    )
 
     summary["recommendation"] = _recommend_default(score_eval, score_time_eval, time_eval, time_time_eval)
     reliability_rows = _build_reliability_table(tuned_data)

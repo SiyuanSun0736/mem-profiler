@@ -14,8 +14,8 @@
 
 当前结果的形态很清楚：
 
-1. proxy 单程序评分已经较稳：`corr_score_log = 0.9072`，`mae_score_log = 0.2726`。
-2. strict time 外部验证仍偏弱：`corr_model_time = 0.3982`，`band_acc_model = 0.6150`。
+1. proxy 单程序评分已经较稳：`corr_score_log = 0.9072`，`mae_score_log = 0.2723`，`band_acc = 0.8048`。
+2. strict time 外部验证仍偏弱：默认 score-first 口径 `corr_model_time = 0.3980`，`band_acc_model = 0.6150`。
 3. `O2-O3` 仍是最难 pair，主要因为 tie 密集且真实差异很小。
 
 所以下一步优化不能只继续加模型复杂度，而应优先解决三个问题：
@@ -29,6 +29,8 @@
 ### A1. Time-aware scoring fine tune
 
 当前训练仍主要对齐 proxy label，最终验收却要看 strict time。可以先不改 backbone，只重新调评分层参数，让锚点聚合更偏向 time 指标。
+
+状态：已完成首轮 focused retune。新增 `time-aware` tuned 选择口径，并在 [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md) 中与 `score-first` / `time-first` 并排回放。
 
 做法：
 
@@ -52,13 +54,20 @@ J =
 - 0.10 \cdot MAE_{time}
 $$
 
-验收标准：
+首轮验收标准：
 
-1. strict time `corr_model_time` 高于当前 `0.3982`。
-2. repeat-backed 子集不低于当前 `0.7879`。
+1. strict time `corr_model_time` 高于默认 score-first 的 `0.3980`。
+2. repeat-backed 子集不低于默认 score-first 的 `0.7881`。
 3. proxy `corr_score_log` 不明显跌破 `0.90`。
 
-这是当前最值得先做的优化，因为它直接针对“proxy 好、time 一般”的主要问题。
+首轮结果：
+
+1. 默认 `score-first` 仍保留为主线：proxy `corr_score_log = 0.9072`，`mae_score_log = 0.2723`。
+2. 可选 `time-aware` 口径达到：proxy `corr_score_log = 0.9059`，strict time `corr_model_time = 0.3993`，`mae_model_time = 1.0878`。
+3. repeat-backed 子集从默认 `0.7881` 提升到 `0.7945`。
+4. 收益方向正确但幅度很小，因此不建议替换默认口径；当实验更看重真实时间外部一致性时，可用 `--tuned-selection-objective time-aware` 显式切换。
+
+这是当前最值得先做的优化，因为它直接针对“proxy 好、time 一般”的主要问题。首轮已经说明评分层可以轻微改善 time 外部一致性，但主要瓶颈仍在标签强度和 near-tie 样本。
 
 ### A2. Per-pair calibration
 
@@ -267,10 +276,10 @@ $$
 
 下一轮建议按下面顺序推进：
 
-1. A1：先做 time-aware scoring fine tune，因为它最直接针对 strict time 短板。
-2. A2：再做 per-pair calibration，低成本修正不同 pair 的尺度偏差。
-3. A3：接入 uncertainty-aware anchor weighting，让单程序输出有 confidence。
-4. A4：尝试 pair-specific tie threshold，专攻 `O2-O3`。
+1. A2：先做 per-pair calibration，低成本修正不同 pair 的尺度偏差。
+2. A3：接入 uncertainty-aware anchor weighting，让单程序输出有 confidence。
+3. A4：尝试 pair-specific tie threshold，专攻 `O2-O3`。
+4. A1：在新增 repeat timing 或扩展 strict time 样本后，再扩大 time-aware 网格重跑。
 5. B4：把质量权重接入训练，减少低质量样本对边界的干扰。
 6. B3：只有当 strict time 样本继续增加后，再做 time distillation head。
 7. B1/B2：如果排序和 band 仍不稳，再加入 ordinal / ranking 目标。

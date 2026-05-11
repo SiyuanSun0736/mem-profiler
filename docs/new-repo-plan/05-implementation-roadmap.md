@@ -37,12 +37,13 @@
 
 **按变体对细分：** `O2-O3` 仍是最难边界，test `acc_3cls=0.4500`、`aux_acc_3cls=0.5000`、`aux_tie_recall=0.4545`
 
-**单程序评分（score-first 默认口径，proxy）：** `mae_score_log=0.2726`，Pearson `r=0.9072`，`dir_acc=0.7807`，`band_acc=0.8021`
+**单程序评分（score-first 默认口径，proxy）：** `mae_score_log=0.2723`，Pearson `r=0.9072`，`dir_acc=0.7807`，`band_acc=0.8048`
 
 **时间评分外部验证（strict score_time，主统计 361/374）：**
 - proxy vs score_time：Pearson `r=0.4415`，Spearman `ρ=0.5635`，`band_acc=0.6205`
-- model vs score_time：Pearson `r=0.3982`，Spearman `ρ=0.5219`，`band_acc=0.6150`
-- repeat-backed only 子集：model vs score_time Pearson `r=0.7879`
+- model vs score_time：Pearson `r=0.3980`，Spearman `ρ=0.5220`，`band_acc=0.6150`
+- repeat-backed only 子集：model vs score_time Pearson `r=0.7881`
+- 可选 `time-aware` 评分口径：strict time Pearson `r=0.3993`，repeat-backed Pearson `r=0.7945`，但 proxy Pearson 降到 `0.9059`
 
 ### 0.2 当前判断
 
@@ -85,13 +86,13 @@
 # Step 5: 评分推断
 .venv/bin/python scripts/score_program.py --device cpu
 # → 默认使用 score-first tuned 参数，并在局部 tuned 不可靠时自动回退到 ALL
-# → n_with_gt=374，Pearson r=0.9072（vs proxy），dir_acc=0.7807，band_acc=0.8021
+# → n_with_gt=374，Pearson r=0.9072（vs proxy），dir_acc=0.7807，band_acc=0.8048
 
 # Step 6: 时间评分验证
 .venv/bin/python scripts/build_time_score_table.py
 .venv/bin/python scripts/evaluate_score_vs_time.py
 # → strict 主统计 361/374，过滤 13 行 low_active_window_ratio
-# → model vs score_time：Pearson r=0.3982，Spearman ρ=0.5219
+# → model vs score_time：Pearson r=0.3980，Spearman ρ=0.5220
 # → proxy vs score_time：Pearson r=0.4415，Spearman ρ=0.5635
 ```
 
@@ -436,18 +437,18 @@ dataset-first-optimization-plan/
 
 目标：在 `aux_class_lambda=0.05` 已经稳定后，继续提升单程序评分，尤其是 strict time 外部一致性。
 
-详细方案见 [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)。当前建议先做四个低成本实验：
+详细方案见 [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)。当前 `A1` 已完成首轮 focused retune，并新增可切换的 `time-aware` 口径；继续建议做下面三个低成本实验：
 
-1. `A1` time-aware scoring fine tune：重搜评分层参数，把 strict time 和 repeat-backed 子集纳入选择目标。
-2. `A2` per-pair calibration：为不同 variant pair 学轻量线性校准，修正输出尺度偏差。
-3. `A3` uncertainty-aware anchor weighting：用多 seed 或 MC dropout 给锚点估计加方差权重。
-4. `A4` pair-specific tie threshold：为 `O1-O2`、`O2-O3` 这类 near-tie pair 单独调 tie 阈值。
+1. `A2` per-pair calibration：为不同 variant pair 学轻量线性校准，修正输出尺度偏差。
+2. `A3` uncertainty-aware anchor weighting：用多 seed 或 MC dropout 给锚点估计加方差权重。
+3. `A4` pair-specific tie threshold：为 `O1-O2`、`O2-O3` 这类 near-tie pair 单独调 tie 阈值。
+4. 后续新增 repeat timing 后，再扩大 `A1` time-aware 网格重跑。
 
 完成标准：
 
 1. proxy `corr_score_log` 不低于 `0.90`。
-2. strict time `corr_model_time` 高于当前 `0.3982`。
-3. repeat-backed 子集 `corr_model_time` 不低于当前 `0.7879`。
+2. strict time `corr_model_time` 高于当前默认 `0.3980`。
+3. repeat-backed 子集 `corr_model_time` 不低于当前默认 `0.7881`。
 4. `O2-O3` 的 `acc_3cls` 或 `aux_tie_recall` 有可解释提升。
 
 ### TODO 3. 单独做难样本误差分析

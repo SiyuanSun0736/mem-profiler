@@ -42,8 +42,8 @@
 2. 未做 strict 过滤时，model vs `score_time`: Pearson r = 0.2799，Spearman ρ = 0.2701。
 3. 当前 strict 主统计为 361 行，其中 `proxy_strict = 286`、`repeat_timing = 75`。
 4. strict 时间真值下，proxy vs `score_time`: Pearson r = 0.4415，Spearman ρ = 0.5635。
-5. strict 时间真值下，model vs `score_time`: Pearson r = 0.3982，Spearman ρ = 0.5219。
-6. `repeat_backed_only` 子集 75 行上，proxy vs `score_time`: Pearson r = 0.8275，model vs `score_time`: Pearson r = 0.7879。
+5. strict 时间真值下，model vs `score_time`: Pearson r = 0.3980，Spearman ρ = 0.5220。
+6. `repeat_backed_only` 子集 75 行上，proxy vs `score_time`: Pearson r = 0.8275，model vs `score_time`: Pearson r = 0.7881。
 7. strict 过滤从 loose 的 374 行里只剔除了 13 行，全部来自 `low_active_window_ratio`；缺 strict O0 baseline 的问题已被 repeat timing 覆盖到 0。
 
 这说明现在的 P2 已经不只是“把低活跃窗口 run 过滤掉”，而是开始把一部分 `score_time` 升级成更强的 fixed-work repeat timing 真值。新的 repeat-backed 子集信号明显更强，但整体 strict 主口径里仍有 286 行依赖 `proxy_strict`，所以当前整体口径依然只是“中等强度时间监督”，还不是纯 wall-time 真值。
@@ -86,7 +86,7 @@
 当前收益已经比较稳定：
 
 1. Transformer test 结果稳定在 `R² = 0.8069`、`dir_acc = 0.9020`、`acc_3cls = 0.7958`。
-2. 单程序评分结果稳定在 `corr_score_log = 0.9072`、`band_accuracy = 0.8021`。
+2. 单程序评分结果稳定在 `corr_score_log = 0.9072`、`band_accuracy = 0.8048`。
 3. 当前已经可以明确判断：坏 run 会直接污染训练和评分链路，先做语义过滤是对的。
 
 所以 P1 在“把坏样本挡在训练链路外”这个目标上已经完成；它不再是当前主变量，除非后续数据采集口径发生变化。
@@ -104,8 +104,8 @@
 
 1. `time_scores` 现在有 `n_valid_strict = 481`，其中 `n_preferred_repeat = 100`，`n_rescued_by_repeat_timing = 91`。
 2. 当前 strict 主统计为 361 行，其中 `proxy_strict = 286`、`repeat_timing = 75`。
-3. strict 主统计上，proxy vs `score_time` 为 Pearson `0.4415`、Spearman `0.5635`；model vs `score_time` 为 Pearson `0.3982`、Spearman `0.5219`。
-4. `repeat_backed_only` 子集 75 行上，proxy vs `score_time` 提升到 Pearson `0.8275`，model vs `score_time` 提升到 Pearson `0.7879`。
+3. strict 主统计上，proxy vs `score_time` 为 Pearson `0.4415`、Spearman `0.5635`；model vs `score_time` 为 Pearson `0.3980`、Spearman `0.5220`。
+4. `repeat_backed_only` 子集 75 行上，proxy vs `score_time` 提升到 Pearson `0.8275`，model vs `score_time` 提升到 Pearson `0.7881`。
 
 所以 P2 现在应当视为“第二阶段已经开始落地”：repeat timing 已经实打实补进来了，而且成功把 91 行从原来的 strict 缺口里救回来。但它还没有完全完成，因为 strict 主口径里仍有大量样本依赖 `proxy_strict`，剩余 13 行也还没有处理完。
 
@@ -125,7 +125,7 @@
 
 1. [train_set/model_transformer_eval.json](../../train_set/model_transformer_eval.json) 中，test 集主头 `dir_acc = 0.9020`、`acc_3cls = 0.7958`，辅助头 `aux_acc_3cls = 0.8417`。
 2. `O2-O3` 上，辅助分类头 `aux_acc_3cls = 0.5000`，仍高于或持平于回归主头 `0.4500`。
-3. [train_set/score_eval.json](../../train_set/score_eval.json) 中，默认 score-first 结果为 `mae_score_log = 0.2726`、`corr_score_log = 0.9072`、`band_accuracy = 0.8021`。
+3. [train_set/score_eval.json](../../train_set/score_eval.json) 中，默认 score-first 结果为 `mae_score_log = 0.2723`、`corr_score_log = 0.9072`、`band_accuracy = 0.8048`。
 4. [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md) 已确认当前默认建议口径为 score-first，time-first 作为可切换选项保留。
 
 所以 P3 当前应当视为“阶段性完成”：训练端 tie-aware、评分层 gating、variant-local tuned 和可靠性回退都已经落地。
@@ -148,9 +148,9 @@
 对应评分结果在 [train_set/score_eval.json](../../train_set/score_eval.json)：
 
 1. `n_with_gt = 374`，覆盖面明显高于只用 O0/O3 时的 250。
-2. `mae_score_log = 0.2726`。
+2. `mae_score_log = 0.2723`。
 3. `corr_score_log = 0.9072`。
-4. `band_accuracy = 0.8021`。
+4. `band_accuracy = 0.8048`。
 
 所以 P4 当前也应视为已完成的基础设施，而不是待验证想法。后续即使继续推进 P3，P4 这层 O0/O2/O3 加权锚点仍然是当前单程序评分成立的底座。
 

@@ -73,7 +73,7 @@
 1. 当前 `pairs.parquet` 覆盖 1494 条 pair、129 个程序；标签分布仍然基本均衡，但 tie 只占 208 条。
 2. 当前主模型 PairTransformer 在测试集上的结果是：`dir_acc = 0.9020`、`acc_3cls = 0.7958`、`r2 = 0.8069`、`aux_acc_3cls = 0.8417`。
 3. 当前最难的边界不是 O0 对高优化级别，而是 `O2-O3`：当前主模型 `acc_3cls = 0.4500`、`aux_tie_recall = 0.4545`，且全量 tie rate 达到 `0.4524`。
-4. 单程序评分已经能工作：默认 score-first tuned 参数下，`corr_score_log = 0.9072`、`mae_score_log = 0.2726`、`band_accuracy = 0.8021`；但 strict 时间外部验证仍只有 `corr_model_time = 0.3982`，所以时间真值仍是短板。
+4. 单程序评分已经能工作：默认 score-first tuned 参数下，`corr_score_log = 0.9072`、`mae_score_log = 0.2723`、`band_accuracy = 0.8048`；但 strict 时间外部验证仍只有 `corr_model_time = 0.3980`，所以时间真值仍是短板。可选 `time-aware` 口径可把 strict time Pearson 提到 `0.3993`、repeat-backed Pearson 提到 `0.7945`，代价是 proxy Pearson 降到 `0.9059`。
 5. 交叉熵损失适合用于当前模型，但定位应是三分类辅助目标：保留 log-ratio 回归头负责连续倍率和锚点评分，用 `i_better / tie / j_better` 交叉熵头优化方向边界与 near-tie 判断。首轮消融显示 `aux_class_lambda=0.05` 综合最好：test `aux_acc_3cls = 0.8417`、`aux_tie_recall = 0.7222`，且 test `MAE = 0.5677`、`R² = 0.8031`。
 
 ## 这版方案主动放弃什么
