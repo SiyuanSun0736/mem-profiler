@@ -78,6 +78,12 @@
 3. R²
 4. `dir_acc`
 5. `acc_3cls`
+6. `aux_acc_3cls`
+7. `aux_tie_recall`
+8. `val_reg_loss`
+9. `val_aux_class_loss`
+
+其中 `acc_3cls` 来自回归头输出按阈值离散后的结果，`aux_acc_3cls` 和 `aux_tie_recall` 来自三分类辅助头。二者必须分开报告：前者衡量连续 log-ratio 头是否天然学到方向边界，后者衡量交叉熵辅助目标是否真的改善 `i_better / tie / j_better` 判别。
 
 ### 5.2 单程序评分指标
 
@@ -106,6 +112,23 @@
 
 1. MLP 和 PairTransformer 的 train/val/test 指标
 2. 与朴素 O-rank 基线的对比
+3. 回归-only 与“回归 + 三分类交叉熵辅助头”的目标函数消融
+
+当前推荐把“回归 + 三分类交叉熵”作为默认训练目标，而不是只作为附加实验。消融的目的不是重新证明要不要分类头，而是确认当前 `aux_class_lambda`、类别权重和 tie 阈值是否仍然合适。
+
+建议至少比较：
+
+1. `L_reg`：只训练 log-ratio 回归头。
+2. `L_reg + λ_cls L_CE`：回归头加三分类交叉熵辅助头。
+3. 可选 `L_reg + λ_cls L_CE + λ_dir L_BCE`：只在二分类方向 BCE 有额外收益时保留。
+
+验收时不要只看 `MAE` 或 `R²`。如果交叉熵辅助头有效，它应至少带来下面一种收益：
+
+1. `aux_acc_3cls` 或 `aux_tie_recall` 提升。
+2. `O1-O2` / `O2-O3` 近邻 pair 的 `acc_3cls` 或 tie 召回提升。
+3. 单程序评分阶段的 gating 更稳，表现为 `band_accuracy` 或 strict time 指标不下降。
+
+当前已完成首轮消融，汇总见 [train_set/objective_ablation.md](../../train_set/objective_ablation.md)。在 `aux_class_lambda ∈ {0, 0.05, 0.10, 0.20, 0.30}` 中，`0.05` 的综合选择分最高：test `aux_acc_3cls = 0.8417`、`aux_tie_recall = 0.7222`、`O2-O3 aux_acc_3cls = 0.6000`，同时 test `MAE = 0.5677`、`R² = 0.8031`。当前主模型已经按 `aux_class_lambda=0.05` 重训，并已同步重跑评分层 gating 和 strict time 评估。
 
 ### E2. 各变体对细分实验
 
@@ -154,6 +177,19 @@
 2. Top bottleneck
 3. 对应热点窗口或热点实体证据
 4. 对应支持特征摘要
+
+### E6. 交叉熵之后的单程序优化实验
+
+目的：在当前 CE 辅助头已经有效的基础上，继续优化单程序评分，尤其是 strict time 外部验证。
+
+第一批实验应优先覆盖：
+
+1. time-aware scoring fine tune
+2. per-pair calibration
+3. uncertainty-aware anchor weighting
+4. pair-specific tie threshold
+
+这些方案的详细定义、优先级和验收标准见 [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)。
 
 ## 7. 当前结果对实验设计的启示
 

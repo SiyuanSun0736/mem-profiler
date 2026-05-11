@@ -1,5 +1,7 @@
 {
   "baseline": "O0",
+  "repeat_timing_name": "repeat_timing.json",
+  "repeat_sidecar_root": "data/llvm_test_suite/repeat_timing_sidecars",
   "min_active_pids": 5,
   "min_active_window_ratio": 0.1,
   "active_window_ratio_available": true,
@@ -9,12 +11,22 @@
   "n_input_filtered": 109,
   "n_programs_with_loose_baseline": 128,
   "n_programs_with_strict_baseline": 104,
+  "n_programs_with_repeat_baseline": 25,
   "n_valid_loose": 498,
-  "n_valid_strict": 390,
+  "n_valid_strict_proxy": 390,
+  "n_valid_repeat": 100,
+  "n_valid_strict": 481,
   "reasons": {
     "low_active_pid_count": 0,
     "low_active_window_ratio": 109,
     "missing_strict_baseline": 10
+  },
+  "repeat_timing": {
+    "n_available_rows": 119,
+    "n_valid_rows": 109,
+    "n_preferred_repeat": 100,
+    "n_preferred_proxy": 381,
+    "n_rescued_by_repeat_timing": 91
   },
   "by_variant": {
     "O0": {
@@ -22,28 +34,44 @@
       "input_ok": 104,
       "input_filtered": 24,
       "valid_loose": 128,
-      "valid_strict": 104
+      "valid_strict_proxy": 104,
+      "valid_repeat": 25,
+      "valid_strict": 121,
+      "preferred_repeat": 25,
+      "preferred_proxy": 96
     },
     "O1": {
       "seen": 127,
       "input_ok": 99,
       "input_filtered": 28,
       "valid_loose": 124,
-      "valid_strict": 96
+      "valid_strict_proxy": 96,
+      "valid_repeat": 25,
+      "valid_strict": 120,
+      "preferred_repeat": 25,
+      "preferred_proxy": 95
     },
     "O2": {
       "seen": 128,
       "input_ok": 99,
       "input_filtered": 29,
       "valid_loose": 124,
-      "valid_strict": 95
+      "valid_strict_proxy": 95,
+      "valid_repeat": 25,
+      "valid_strict": 120,
+      "preferred_repeat": 25,
+      "preferred_proxy": 95
     },
     "O3": {
       "seen": 126,
       "input_ok": 98,
       "input_filtered": 28,
       "valid_loose": 122,
-      "valid_strict": 95
+      "valid_strict_proxy": 95,
+      "valid_repeat": 25,
+      "valid_strict": 120,
+      "preferred_repeat": 25,
+      "preferred_proxy": 95
     }
   },
   "examples": [

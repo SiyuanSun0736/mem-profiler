@@ -50,8 +50,9 @@ tie-aware 解码：
   # 强制 CPU
   python scripts/score_program.py --device cpu
 
-    # 若更关注时间外部验证而不是 proxy 评分，可切回 time-first tuned 参数
+    # 若更关注时间外部验证而不是 proxy 评分，可切回 time-first / time-aware tuned 参数
     python scripts/score_program.py --tuned-selection-objective time
+    python scripts/score_program.py --tuned-selection-objective time-aware
 
     # 将评估 JSON 写到自定义路径，便于并存多套结果
     python scripts/score_program.py \
@@ -356,6 +357,11 @@ def _load_tuned_variant_defaults(
 
     if selection_objective == "score":
         best_by_variant = data.get("best_for_score_by_variant") or data.get("best_by_variant")
+    elif selection_objective == "time-aware":
+        best_by_variant = (
+            data.get("best_time_aware_by_variant")
+            or data.get("best_by_variant")
+        )
     else:
         best_by_variant = data.get("best_by_variant")
     if not isinstance(best_by_variant, dict):
@@ -599,9 +605,9 @@ def main() -> None:
                         help="评估 JSON 输出路径；默认写到 train_set/score_eval.json")
     parser.add_argument("--tuned-defaults-json", default=DEFAULT_TUNED_DEFAULTS_JSON,
                         help="按 variant 覆盖评分默认值的 tuned JSON；CLI 显式传参优先")
-    parser.add_argument("--tuned-selection-objective", choices=["score", "time"],
+    parser.add_argument("--tuned-selection-objective", choices=["score", "time", "time-aware"],
                         default=DEFAULT_TUNED_SELECTION_OBJECTIVE,
-                        help="从 tuned JSON 中选择 score-first 还是 time-first 的最优参数")
+                        help="从 tuned JSON 中选择 score-first、time-first 或 time-aware 的最优参数")
     parser.add_argument("--device",     default=None)
     parser.add_argument("--tie-gate-threshold", type=float, default=None,
                         help="辅助分类头判为 tie 时将回归输出压到 0 的阈值")

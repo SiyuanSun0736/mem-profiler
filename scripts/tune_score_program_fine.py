@@ -14,7 +14,8 @@ tune_score_program_fine.py — score_program 评分层精调（variant 分开调
 2. 以 `time_spearman`、`score_corr`、`time_mae` 作为 tie-break。
 3. 每个 variant 单独选最优参数，不做全局共用。
 
-同时额外输出一套 score-first 的最优参数，供 score_program 在“单程序评分优先”场景默认使用。
+同时额外输出 score-first 和 time-aware 两套最优参数，供 score_program
+在“单程序评分优先”和“时间外部验证优先”场景切换使用。
 
 输出
 ----
@@ -22,7 +23,8 @@ tune_score_program_fine.py — score_program 评分层精调（variant 分开调
   train_set/score_tune_fine_variant_best.json
 
 其中 `best_by_variant` 保留 time-first 结果，`best_for_score_by_variant`
-保留 score-first 结果，供 `score_program.py` 默认优先使用。
+保留 score-first 结果，`best_time_aware_by_variant` 保留多目标 time-aware
+结果，供 `score_program.py` 按选择目标使用。
 
 用法
 ----
@@ -137,6 +139,17 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="只跑前 N 个组合，用于快速验证；0 表示跑完整网格",
     )
+    parser.add_argument(
+        "--print-every",
+        type=int,
+        default=250,
+        help="每隔多少个 trial 打印一次进度；1 表示每个 trial 都打印",
+    )
+    parser.add_argument("--time-aware-score-weight", type=float, default=0.35)
+    parser.add_argument("--time-aware-time-weight", type=float, default=0.35)
+    parser.add_argument("--time-aware-band-weight", type=float, default=0.20)
+    parser.add_argument("--time-aware-repeat-weight", type=float, default=0.10)
+    parser.add_argument("--time-aware-mae-weight", type=float, default=0.10)
     return parser.parse_args()
 
 
@@ -176,12 +189,53 @@ def _safe_mae(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.mean(np.abs(a - b)))
 
 
+def _safe_dir_acc(pred: np.ndarray, ref: np.ndarray) -> float:
+    mask = np.abs(ref) > 1e-6
+    if int(mask.sum()) == 0:
+        return float("nan")
+    return float(np.mean(np.sign(pred[mask]) == np.sign(ref[mask])))
+
+
+def _normalize_to_100(values: pd.Series, ref_min: float, ref_max: float) -> pd.Series:
+    span = ref_max - ref_min
+    if span < 1e-9:
+        return pd.Series(50.0, index=values.index)
+    return ((values - ref_min) / span * 100.0).clip(0.0, 100.0)
+
+
+def _to_band(values_100: pd.Series) -> pd.Series:
+    def label(value: float) -> str:
+        if value < 25:
+            return "poor"
+        if value < 50:
+            return "medium"
+        if value < 75:
+            return "good"
+        return "strong"
+
+    return values_100.apply(label)
+
+
+def _band_acc(df: pd.DataFrame, pred_col: str, ref_col: str) -> float:
+    if len(df) == 0:
+        return float("nan")
+    ref_min = float(df["score_gt"].min())
+    ref_max = float(df["score_gt"].max())
+    pred_band = _to_band(_normalize_to_100(df[pred_col], ref_min, ref_max))
+    ref_band = _to_band(_normalize_to_100(df[ref_col], ref_min, ref_max))
+    return float((pred_band == ref_band).mean())
+
+
 def _metric_desc(value: float) -> float:
     return -1e18 if np.isnan(value) else float(value)
 
 
 def _metric_asc(value: float) -> float:
     return 1e18 if np.isnan(value) else float(value)
+
+
+def _metric_zero(value: float) -> float:
+    return 0.0 if np.isnan(value) else float(value)
 
 
 def _decode_pair_from_probs(
@@ -345,27 +399,52 @@ def evaluate_variant(
 ) -> dict[str, Any]:
     subset = scored[scored["variant"] == variant].copy()
     merged = subset.merge(
-        df_time[[c for c in ["program", "variant", "score_time", "score_time_loose"] if c in df_time.columns]],
+        df_time[
+            [
+                c
+                for c in [
+                    "program",
+                    "variant",
+                    "score_time",
+                    "score_time_loose",
+                    "score_time_source",
+                ]
+                if c in df_time.columns
+            ]
+        ],
         on=["program", "variant"],
         how="left",
     )
+    if "score_time_source" not in merged.columns:
+        merged["score_time_source"] = ""
 
     time_valid = merged.dropna(subset=["score_log", "score_time"]).copy()
     score_valid = merged.dropna(subset=["score_log", "score_gt"]).copy()
+    strict_valid = merged.dropna(subset=["score_log", "score_gt", "score_time"]).copy()
+    repeat_valid = strict_valid[strict_valid["score_time_source"] == "repeat_timing"].copy()
 
     time_pred = time_valid["score_log"].to_numpy(dtype=float)
     time_ref = time_valid["score_time"].to_numpy(dtype=float)
     score_pred = score_valid["score_log"].to_numpy(dtype=float)
     score_ref = score_valid["score_gt"].to_numpy(dtype=float)
+    repeat_pred = repeat_valid["score_log"].to_numpy(dtype=float)
+    repeat_ref = repeat_valid["score_time"].to_numpy(dtype=float)
 
     return {
         "variant": variant,
         "n_runs": int(len(subset)),
         "n_time_valid": int(len(time_valid)),
         "n_score_valid": int(len(score_valid)),
+        "n_strict_valid": int(len(strict_valid)),
+        "n_repeat_valid": int(len(repeat_valid)),
         "time_corr": round(_safe_pearson(time_pred, time_ref), 6),
         "time_spearman": round(_safe_spearman(time_pred, time_ref), 6),
         "time_mae": round(_safe_mae(time_pred, time_ref), 6),
+        "time_dir_acc": round(_safe_dir_acc(time_pred, time_ref), 6),
+        "time_band_acc": round(_band_acc(strict_valid, "score_log", "score_time"), 6),
+        "repeat_corr": round(_safe_pearson(repeat_pred, repeat_ref), 6),
+        "repeat_spearman": round(_safe_spearman(repeat_pred, repeat_ref), 6),
+        "repeat_mae": round(_safe_mae(repeat_pred, repeat_ref), 6),
         "score_corr": round(_safe_pearson(score_pred, score_ref), 6),
         "score_mae": round(_safe_mae(score_pred, score_ref), 6),
     }
@@ -373,26 +452,51 @@ def evaluate_variant(
 
 def evaluate_overall(scored: pd.DataFrame, df_time: pd.DataFrame) -> dict[str, Any]:
     merged = scored.merge(
-        df_time[[c for c in ["program", "variant", "score_time", "score_time_loose"] if c in df_time.columns]],
+        df_time[
+            [
+                c
+                for c in [
+                    "program",
+                    "variant",
+                    "score_time",
+                    "score_time_loose",
+                    "score_time_source",
+                ]
+                if c in df_time.columns
+            ]
+        ],
         on=["program", "variant"],
         how="left",
     )
+    if "score_time_source" not in merged.columns:
+        merged["score_time_source"] = ""
     time_valid = merged.dropna(subset=["score_log", "score_time"]).copy()
     score_valid = merged.dropna(subset=["score_log", "score_gt"]).copy()
+    strict_valid = merged.dropna(subset=["score_log", "score_gt", "score_time"]).copy()
+    repeat_valid = strict_valid[strict_valid["score_time_source"] == "repeat_timing"].copy()
 
     time_pred = time_valid["score_log"].to_numpy(dtype=float)
     time_ref = time_valid["score_time"].to_numpy(dtype=float)
     score_pred = score_valid["score_log"].to_numpy(dtype=float)
     score_ref = score_valid["score_gt"].to_numpy(dtype=float)
+    repeat_pred = repeat_valid["score_log"].to_numpy(dtype=float)
+    repeat_ref = repeat_valid["score_time"].to_numpy(dtype=float)
 
     return {
         "variant": "ALL",
         "n_runs": int(len(scored)),
         "n_time_valid": int(len(time_valid)),
         "n_score_valid": int(len(score_valid)),
+        "n_strict_valid": int(len(strict_valid)),
+        "n_repeat_valid": int(len(repeat_valid)),
         "time_corr": round(_safe_pearson(time_pred, time_ref), 6),
         "time_spearman": round(_safe_spearman(time_pred, time_ref), 6),
         "time_mae": round(_safe_mae(time_pred, time_ref), 6),
+        "time_dir_acc": round(_safe_dir_acc(time_pred, time_ref), 6),
+        "time_band_acc": round(_band_acc(strict_valid, "score_log", "score_time"), 6),
+        "repeat_corr": round(_safe_pearson(repeat_pred, repeat_ref), 6),
+        "repeat_spearman": round(_safe_spearman(repeat_pred, repeat_ref), 6),
+        "repeat_mae": round(_safe_mae(repeat_pred, repeat_ref), 6),
         "score_corr": round(_safe_pearson(score_pred, score_ref), 6),
         "score_mae": round(_safe_mae(score_pred, score_ref), 6),
     }
@@ -414,6 +518,30 @@ def score_first_trial_sort_key(row: dict[str, Any]) -> tuple[float, float, float
         -_metric_asc(float(row.get("score_mae", float("nan")))),
         _metric_desc(float(row.get("time_corr", float("nan")))),
         _metric_desc(float(row.get("time_spearman", float("nan")))),
+        -_metric_asc(float(row.get("time_mae", float("nan")))),
+    )
+
+
+def time_aware_score(row: dict[str, Any], weights: dict[str, float]) -> float:
+    return (
+        weights["score"] * _metric_zero(float(row.get("score_corr", float("nan"))))
+        + weights["time"] * _metric_zero(float(row.get("time_corr", float("nan"))))
+        + weights["band"] * _metric_zero(float(row.get("time_band_acc", float("nan"))))
+        + weights["repeat"] * _metric_zero(float(row.get("repeat_corr", float("nan"))))
+        - weights["mae"] * _metric_zero(float(row.get("time_mae", float("nan"))))
+    )
+
+
+def time_aware_trial_sort_key(
+    row: dict[str, Any],
+    weights: dict[str, float],
+) -> tuple[float, float, float, float, float, float]:
+    return (
+        time_aware_score(row, weights),
+        _metric_desc(float(row.get("time_corr", float("nan")))),
+        _metric_desc(float(row.get("repeat_corr", float("nan")))),
+        _metric_desc(float(row.get("score_corr", float("nan")))),
+        _metric_desc(float(row.get("time_band_acc", float("nan")))),
         -_metric_asc(float(row.get("time_mae", float("nan")))),
     )
 
@@ -483,14 +611,17 @@ def main() -> None:
             metrics["combo_index"] = combo_idx
             all_trials.append(metrics)
 
-        print(
-            "[trial] "
-            f"{combo_idx:03d}/{len(combos)} "
-            f"gate={params['tie_gate_threshold']:.2f} "
-            f"shrink={params['tie_shrink_power']:.2f} "
-            f"alpha={params['tie_margin_weight_alpha']:.2f} "
-            f"overall_time_corr={overall['time_corr']:.4f}"
-        )
+        if args.print_every > 0 and (combo_idx == 1 or combo_idx == len(combos) or combo_idx % args.print_every == 0):
+            print(
+                "[trial] "
+                f"{combo_idx:04d}/{len(combos)} "
+                f"gate={params['tie_gate_threshold']:.2f} "
+                f"shrink={params['tie_shrink_power']:.2f} "
+                f"alpha={params['tie_margin_weight_alpha']:.2f} "
+                f"overall_time_corr={overall['time_corr']:.4f} "
+                f"band={overall['time_band_acc']:.4f} "
+                f"repeat={overall['repeat_corr']:.4f}"
+            )
 
     trials_df = pd.DataFrame(all_trials)
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -500,9 +631,18 @@ def main() -> None:
         "variants": variants,
         "n_combos": len(combos),
         "grid": grid,
+        "time_aware_weights": {
+            "score": args.time_aware_score_weight,
+            "time": args.time_aware_time_weight,
+            "band": args.time_aware_band_weight,
+            "repeat": args.time_aware_repeat_weight,
+            "mae": args.time_aware_mae_weight,
+        },
         "best_by_variant": {},
         "best_for_score_by_variant": {},
+        "best_time_aware_by_variant": {},
     }
+    time_aware_weights = summary["time_aware_weights"]
     for variant in ["ALL", *variants]:
         subset = trials_df[trials_df["variant"] == variant].copy()
         rows = subset.to_dict(orient="records")
@@ -516,6 +656,17 @@ def main() -> None:
         summary["best_for_score_by_variant"][variant] = {
             "best": score_rows[0] if score_rows else None,
             "top_trials": score_rows[: max(args.top_k, 1)],
+        }
+        aware_rows = subset.to_dict(orient="records")
+        for row in aware_rows:
+            row["time_aware_score"] = round(time_aware_score(row, time_aware_weights), 6)
+        aware_rows.sort(
+            key=lambda row: time_aware_trial_sort_key(row, time_aware_weights),
+            reverse=True,
+        )
+        summary["best_time_aware_by_variant"][variant] = {
+            "best": aware_rows[0] if aware_rows else None,
+            "top_trials": aware_rows[: max(args.top_k, 1)],
         }
 
     best_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
@@ -535,6 +686,19 @@ def main() -> None:
             f"time_corr={best['time_corr']:.4f} "
             f"score_corr={best['score_corr']:.4f}"
         )
+        aware = summary["best_time_aware_by_variant"][variant]["best"]
+        if aware:
+            print(
+                f"[aware] {variant}: "
+                f"gate={aware['tie_gate_threshold']:.2f} "
+                f"shrink={aware['tie_shrink_power']:.2f} "
+                f"alpha={aware['tie_margin_weight_alpha']:.2f} "
+                f"time_corr={aware['time_corr']:.4f} "
+                f"repeat_corr={aware['repeat_corr']:.4f} "
+                f"band={aware['time_band_acc']:.4f} "
+                f"score_corr={aware['score_corr']:.4f} "
+                f"aware_score={aware['time_aware_score']:.4f}"
+            )
 
 
 if __name__ == "__main__":

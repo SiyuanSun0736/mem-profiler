@@ -19,6 +19,8 @@ GRID_SPACE: dict[str, list[Any]] = {
     "lr":               [1e-4, 3e-4],
     "huber_delta":      [0.5, 1.0],
     "direction_lambda": [0.0, 0.15],
+    "aux_class_lambda": [0.0, 0.10, 0.20, 0.30],
+    "class_balance_power": [0.0, 0.50],
     "noise_std":        [0.0, 0.008],
 }
 
@@ -35,6 +37,8 @@ RANDOM_SPACE: dict[str, Any] = {
     "wd":               (1e-5, 5e-4),    # log-uniform
     "huber_delta":      (0.3, 1.5),
     "direction_lambda": (0.0, 0.5),
+    "aux_class_lambda": [0.0, 0.05, 0.10, 0.20, 0.30],
+    "class_balance_power": [0.0, 0.25, 0.50, 0.75],
     "noise_std":        (0.0, 0.02),
     "batch":            [32, 64, 128],
 }

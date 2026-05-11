@@ -23,7 +23,8 @@
 6. [06-collection-to-transformer-workflow.md](06-collection-to-transformer-workflow.md)：从采集数据到 PairTransformer 训练、单程序评分与可选评分层 fine tune 的具体执行流程与流程图。
 7. [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)：当前数据问题、最值得做的优化和优先级。
 8. [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md)：score-first 与 time-first 两套默认口径的并排对比表与默认建议。
-9. [current-data-quality-audit.md](current-data-quality-audit.md)：当前数据快照、完整问题样本清单和 O2/O3 难例分流建议。
+9. [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)：接入交叉熵辅助头后的下一批优化方法、优先级和验收标准。
+10. [current-data-quality-audit.md](current-data-quality-audit.md)：当前数据快照、完整问题样本清单和 O2/O3 难例分流建议。
 
 ## 推荐阅读顺序
 
@@ -36,6 +37,8 @@
 如果你的目标是先判断这批数据最主要的问题在哪、下一步优先改什么，先读 [current-data-quality-audit.md](current-data-quality-audit.md)，再读 [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)。
 
 如果你的目标是确定 `score_program.py` 默认该走 score-first 还是 time-first，先读 [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md)。
+
+如果你的目标是继续提升单程序准确度，先读 [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)。
 
 如果你的目标是判断当前模型路线是否合理，再读 [04-model-plan.md](04-model-plan.md)。
 
@@ -68,9 +71,10 @@
 下面这些指标全部基于当前冻结的 train_set 快照，而不是直接由最新 raw manifest 即时重算。
 
 1. 当前 `pairs.parquet` 覆盖 1494 条 pair、129 个程序；标签分布仍然基本均衡，但 tie 只占 208 条。
-2. 当前主模型 PairTransformer 在测试集上的结果是：`dir_acc = 0.8775`、`acc_3cls = 0.7833`、`r2 = 0.7926`。
-3. 当前最难的边界不是 O0 对高优化级别，而是 `O2-O3`：`acc_3cls = 0.4500`、`aux_tie_recall = 0.5455`，且全量 tie rate 达到 `0.4524`。
-4. 单程序评分已经能工作：默认 score-first tuned 参数下，`corr_score_log = 0.9005`、`mae_score_log = 0.3160`、`band_accuracy = 0.8075`；但 strict 时间外部验证仍只有 `corr_model_time = 0.4325`，所以时间真值仍是短板。
+2. 当前主模型 PairTransformer 在测试集上的结果是：`dir_acc = 0.9020`、`acc_3cls = 0.7958`、`r2 = 0.8069`、`aux_acc_3cls = 0.8417`。
+3. 当前最难的边界不是 O0 对高优化级别，而是 `O2-O3`：当前主模型 `acc_3cls = 0.4500`、`aux_tie_recall = 0.4545`，且全量 tie rate 达到 `0.4524`。
+4. 单程序评分已经能工作：默认 score-first tuned 参数下，`corr_score_log = 0.9072`、`mae_score_log = 0.2726`、`band_accuracy = 0.8021`；但 strict 时间外部验证仍只有 `corr_model_time = 0.3982`，所以时间真值仍是短板。
+5. 交叉熵损失适合用于当前模型，但定位应是三分类辅助目标：保留 log-ratio 回归头负责连续倍率和锚点评分，用 `i_better / tie / j_better` 交叉熵头优化方向边界与 near-tie 判断。首轮消融显示 `aux_class_lambda=0.05` 综合最好：test `aux_acc_3cls = 0.8417`、`aux_tie_recall = 0.7222`，且 test `MAE = 0.5677`、`R² = 0.8031`。
 
 ## 这版方案主动放弃什么
 

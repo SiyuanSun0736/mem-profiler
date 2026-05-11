@@ -39,8 +39,9 @@ NEAR_TIE_THRESHOLD = 0.25
 LOG_RATIO_CLIP = 6.0          # 裁剪极端 log_ratio（±6σ ≈ 400x cycles 差异）
 DEFAULT_TIE_REG_WEIGHT = 0.35
 DEFAULT_NEAR_TIE_REG_WEIGHT = 0.65
-DEFAULT_AUX_CLASS_LAMBDA = 0.20
+DEFAULT_AUX_CLASS_LAMBDA = 0.05
 DEFAULT_CLASS_BALANCE_POWER = 0.50
+CLASS_LABELS = ("i_better", "tie", "j_better")
 
 # ── 微调预设（参考 Siamese-MicroPerf tuned_configs.py）──────────────────────
 # 机制：fixed_work — log_ratio = log(cycles_j / cycles_i)，clip ±6
@@ -329,6 +330,17 @@ def balanced_class_weights(
     weights = np.power(max_count / counts, power).astype(np.float32)
     weights = weights / weights.mean()
     return weights
+
+
+def class_weight_dict(
+    label_int: np.ndarray,
+    power: float = DEFAULT_CLASS_BALANCE_POWER,
+) -> dict[str, float]:
+    weights = balanced_class_weights(label_int, power=power)
+    return {
+        label: round(float(weight), 6)
+        for label, weight in zip(CLASS_LABELS, weights)
+    }
 
 
 def weighted_mean(loss_values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
@@ -908,6 +920,47 @@ def main() -> None:
         "n_params":       n_params,
         "device":         str(device),
         "log_ratio_clip": args.clip,
+        "training_objective": {
+            "regression_loss": "weighted_huber",
+            "classification_loss": (
+                "weighted_cross_entropy"
+                if args.aux_class_lambda > 0.0
+                else "disabled"
+            ),
+            "direction_loss": (
+                "binary_cross_entropy"
+                if args.direction_lambda > 0.0
+                else "disabled"
+            ),
+            "loss_formula": "L = L_reg + aux_class_lambda * L_CE + direction_lambda * L_dir",
+            "aux_class_enabled": bool(args.aux_class_lambda > 0.0),
+            "aux_class_lambda": args.aux_class_lambda,
+            "class_balance_power": args.class_balance_power,
+            "class_weights": class_weight_dict(
+                df_train["label_int"].values.astype(np.int64),
+                power=args.class_balance_power,
+            ),
+            "final_train_loss": (
+                round(float(history["train_loss"][-1]), 6)
+                if history["train_loss"]
+                else None
+            ),
+            "final_val_loss": (
+                round(float(history["val_loss"][-1]), 6)
+                if history["val_loss"]
+                else None
+            ),
+            "final_val_reg_loss": (
+                round(float(history["val_reg_loss"][-1]), 6)
+                if history["val_reg_loss"]
+                else None
+            ),
+            "final_val_aux_class_loss": (
+                round(float(history["val_aux_class_loss"][-1]), 6)
+                if history["val_aux_class_loss"]
+                else None
+            ),
+        },
         "tie_strategy": {
             "tie_threshold": TIE_THRESHOLD,
             "near_tie_threshold": args.near_tie_threshold,

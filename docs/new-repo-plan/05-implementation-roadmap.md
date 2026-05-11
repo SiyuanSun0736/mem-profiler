@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | M0. 冻结数据集边界 | 已完成 | 已明确当前账本口径是 `145 x 4 / 580 runs`，训练口径是语义过滤后的 `509 runs / 1494 pairs / 374 anchors` | 方案边界与当前产物一致 |
 | M1. 跑通运行级样本构建 | 已完成 | 已有 `run_features.parquet`、`run_features_zscore.parquet`、`run_feature_filter_summary.json` | 运行级摘要和过滤口径都已固定 |
-| M2. 跑通成对建模闭环 | 已完成 | 已有 `pairs.parquet`、`model_transformer_eval.json`、按程序 held-out 划分结果 | pairwise 主任务已经成立 |
+| M2. 跑通成对建模闭环 | 已完成 | 已有 `pairs.parquet`、`model_transformer_eval.json`、按程序 held-out 划分结果；交叉熵辅助目标消融已写入 `train_set/objective_ablation.md` | pairwise 主任务已经成立，当前默认 CE 权重建议为 `0.05` |
 | M3. 跑通单程序评分 | 部分完成 | 已有 `anchor_set.parquet`、`score_eval.json`、`score_time_eval.json` | proxy 口径已稳，但真实时间一致性仍只有中等相关 |
 | M4. 跑通诊断证据绑定 | 部分完成 | `score_program.py` 已输出分数、档位和一级瓶颈，但还没沉淀成标准化诊断报告文件 | 证据链已存在，自动挂接还没完全收口 |
 | M5. 扩展特征并重训 | 部分完成 | fault subtype、mm syscall、warmup/steady-state 已进入主特征；`feature_columns.py` 已统一输入列 | 第一轮特征扩展已落地，下一步应转向增益验证和剩余字段补齐 |
@@ -22,7 +22,7 @@
 
 ### 0.1 当前量化结果
 
-> 最后更新：2026-05-07（按当前训练产物与默认评分口径同步）
+> 最后更新：2026-05-11（按交叉熵辅助目标、默认评分口径和 strict 时间验证重跑）
 
 **数据规模（当前 full/curated 账本与过滤后训练子集）：**
 
@@ -31,15 +31,18 @@
 - 当前 `pairs.parquet` 覆盖 129 个程序，`anchor_set.parquet` 覆盖 128 个拥有 O0 基线的程序
 - 当前输入特征为 53 维，pair 输入为 159 维；`minor_fault_ratio` 只保留在账本中，不再进入模型输入
 
-**PairTransformer（d_model=64，nhead=4，3层，53 维运行级输入）：** test MAE=0.5863，RMSE=0.9003，R²=0.7926，`dir_acc=0.8775`，`acc_3cls=0.7833`，`aux_acc_3cls=0.8292`
+**PairTransformer（d_model=64，nhead=2，3层，53 维运行级输入，`aux_class_lambda=0.05`）：** test MAE=0.5678，RMSE=0.8685，R²=0.8069，`dir_acc=0.9020`，`acc_3cls=0.7958`，`aux_acc_3cls=0.8417`，`aux_tie_recall=0.6667`
 
-**按变体对细分：** `O2-O3` 仍是最难边界，test `acc_3cls=0.4500`、`aux_tie_recall=0.5455`
+**目标函数消融（fixed_work_transformer，CPU，120 epochs 上限）：** `aux_class_lambda=0.05` 综合最好，test MAE=0.5677，R²=0.8031，`dir_acc=0.9069`，`acc_3cls=0.7708`，`aux_acc_3cls=0.8417`，`aux_tie_recall=0.7222`，`O2-O3 aux_acc_3cls=0.6000`
 
-**单程序评分（score-first 默认口径，proxy）：** `mae_score_log=0.3160`，Pearson `r=0.9005`，`dir_acc=0.7567`，`band_acc=0.8075`
+**按变体对细分：** `O2-O3` 仍是最难边界，test `acc_3cls=0.4500`、`aux_acc_3cls=0.5000`、`aux_tie_recall=0.4545`
 
-**时间评分外部验证（strict score_time，主统计 294/374）：**
-- proxy vs score_time：Pearson `r=0.4658`，Spearman `ρ=0.5518`，`band_acc=0.6531`
-- model vs score_time：Pearson `r=0.4325`，Spearman `ρ=0.5181`，`band_acc=0.6769`
+**单程序评分（score-first 默认口径，proxy）：** `mae_score_log=0.2726`，Pearson `r=0.9072`，`dir_acc=0.7807`，`band_acc=0.8021`
+
+**时间评分外部验证（strict score_time，主统计 361/374）：**
+- proxy vs score_time：Pearson `r=0.4415`，Spearman `ρ=0.5635`，`band_acc=0.6205`
+- model vs score_time：Pearson `r=0.3982`，Spearman `ρ=0.5219`，`band_acc=0.6150`
+- repeat-backed only 子集：model vs score_time Pearson `r=0.7879`
 
 ### 0.2 当前判断
 
@@ -76,20 +79,20 @@
 # Step 4: 模型训练（Transformer）
 .venv/bin/python scripts/train_transformer.py
 # → 当前主线模型：PairTransformer
-# → test MAE=0.5863，R²=0.7926，dir_acc=0.8775，acc_3cls=0.7833
-# → O2-O3 pair `acc_3cls=0.4500`、`aux_tie_recall=0.5455`（最难）
+# → test MAE=0.5678，R²=0.8069，dir_acc=0.9020，acc_3cls=0.7958
+# → O2-O3 pair `acc_3cls=0.4500`、`aux_tie_recall=0.4545`（最难）
 
 # Step 5: 评分推断
 .venv/bin/python scripts/score_program.py --device cpu
 # → 默认使用 score-first tuned 参数，并在局部 tuned 不可靠时自动回退到 ALL
-# → n_with_gt=374，Pearson r=0.9005（vs proxy），dir_acc=0.7567，band_acc=0.8075
+# → n_with_gt=374，Pearson r=0.9072（vs proxy），dir_acc=0.7807，band_acc=0.8021
 
 # Step 6: 时间评分验证
 .venv/bin/python scripts/build_time_score_table.py
 .venv/bin/python scripts/evaluate_score_vs_time.py
-# → strict 主统计 294/374，过滤 80 行低 active_window_ratio
-# → model vs score_time：Pearson r=0.4325，Spearman ρ=0.5181
-# → proxy vs score_time：Pearson r=0.4658，Spearman ρ=0.5518
+# → strict 主统计 361/374，过滤 13 行 low_active_window_ratio
+# → model vs score_time：Pearson r=0.3982，Spearman ρ=0.5219
+# → proxy vs score_time：Pearson r=0.4415，Spearman ρ=0.5635
 ```
 
 **发现的问题：**
@@ -343,8 +346,9 @@ dataset-first-optimization-plan/
 1. 新增线性基线训练脚本，至少输出 Ridge / Logistic Regression 的 held-out 结果。
 2. 新增统一评估脚本，读取朴素基线、线性基线、Transformer 的结果文件。
 3. 输出 `train_set/eval_summary.csv` 和 `train_set/eval_summary.md`。
-4. 把评估维度统一成：`MAE`、`RMSE`、`R²`、`dir_acc`、`acc_3cls`，并附带每个 split 的样本量。
+4. 把评估维度统一成：`MAE`、`RMSE`、`R²`、`dir_acc`、`acc_3cls`、`aux_acc_3cls`、`aux_tie_recall`，并附带每个 split 的样本量。
 5. 单程序评分部分额外输出 `score_model` 对 `score_time` 的 `MAE`、Pearson/Spearman 相关、`band_accuracy_time`。
+6. 训练目标部分额外记录 `val_reg_loss`、`val_aux_class_loss`、`aux_class_lambda`、`class_balance_power`，明确当前是否启用了三分类交叉熵辅助损失。
 
 建议命令：
 
@@ -360,6 +364,40 @@ dataset-first-optimization-plan/
 2. 不再需要手工打开多个 json 文件拼结论。
 3. 单程序评分既能看 proxy 结果，也能看时间评分验证结果。
 4. 文档里的模型结论可以直接引用 `eval_summary.md`。
+
+### TODO 2.1. 固化交叉熵辅助目标消融
+
+目标：把“能否通过交叉熵损失优化模型”变成可复现的训练目标对比，而不是只看单次训练结果。
+
+状态：已完成首轮脚本和数据收集。新增 [scripts/run_transformer_objective_ablation.py](../../scripts/run_transformer_objective_ablation.py)，结果落盘到 [train_set/transformer_objective_ablation.json](../../train_set/transformer_objective_ablation.json) 和 [train_set/objective_ablation.md](../../train_set/objective_ablation.md)。当前推荐默认 `aux_class_lambda=0.05`，并已用该默认值重训主模型、重跑 score-first / time-first 评分层对比和 strict time 验证。
+
+涉及文件：
+
+1. `scripts/train_transformer.py`
+2. `scripts/tune_transformer.py`
+3. `train_set/model_transformer_eval.json`
+4. 新增或扩展 `train_set/objective_ablation.md`
+
+具体改动：
+
+1. 固定三组训练目标：`L_reg`、`L_reg + λ_cls L_CE`、可选 `L_reg + λ_cls L_CE + λ_dir L_BCE`。
+2. 每组至少输出整体 test 指标、各 variant pair 指标、`aux_acc_3cls`、`aux_tie_recall`。
+3. 对 `λ_cls` 做小网格，例如 `0.05 / 0.10 / 0.20 / 0.30`，默认优先选择不损害 `MAE/R²` 且提升近邻 pair 分类指标的值。
+4. 类别权重继续使用训练集 label 分布计算，并记录 `class_balance_power`。
+5. 把最优目标函数写入模型评估 JSON，避免后续无法判断一次结果是否启用了交叉熵。
+
+建议命令：
+
+```bash
+.venv/bin/python scripts/tune_transformer.py
+.venv/bin/python scripts/train_transformer.py --config fixed_work_transformer --aux-class-lambda 0.05
+```
+
+完成标准：
+
+1. 能明确回答三分类交叉熵是否改善方向、tie 和近邻 pair。
+2. 默认模型目标仍保留连续 log-ratio 回归头，不退化成纯分类器。
+3. 若交叉熵提升 `aux_acc_3cls` 但损害 strict time 评分，应在报告中标记为“分类边界有效，最终评分未受益”。
 
 ### TODO 2.5. 加固时间评分验证闭环
 
@@ -393,6 +431,24 @@ dataset-first-optimization-plan/
 1. 最终模型分数有独立时间评分对照，不再只围绕 proxy label 自证。
 2. 报告能明确回答模型分数是否真的对应时间收益。
 3. 后续所有“单程序评分有效”的结论默认引用 `score_time_eval.json`。
+
+### TODO 2.6. 做交叉熵之后的单程序优化实验
+
+目标：在 `aux_class_lambda=0.05` 已经稳定后，继续提升单程序评分，尤其是 strict time 外部一致性。
+
+详细方案见 [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)。当前建议先做四个低成本实验：
+
+1. `A1` time-aware scoring fine tune：重搜评分层参数，把 strict time 和 repeat-backed 子集纳入选择目标。
+2. `A2` per-pair calibration：为不同 variant pair 学轻量线性校准，修正输出尺度偏差。
+3. `A3` uncertainty-aware anchor weighting：用多 seed 或 MC dropout 给锚点估计加方差权重。
+4. `A4` pair-specific tie threshold：为 `O1-O2`、`O2-O3` 这类 near-tie pair 单独调 tie 阈值。
+
+完成标准：
+
+1. proxy `corr_score_log` 不低于 `0.90`。
+2. strict time `corr_model_time` 高于当前 `0.3982`。
+3. repeat-backed 子集 `corr_model_time` 不低于当前 `0.7879`。
+4. `O2-O3` 的 `acc_3cls` 或 `aux_tie_recall` 有可解释提升。
 
 ### TODO 3. 单独做难样本误差分析
 

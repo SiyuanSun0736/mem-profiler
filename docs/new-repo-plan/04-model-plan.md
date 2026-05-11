@@ -115,6 +115,13 @@ pairwise 标签不是“相似不相似”，而是“谁更优、差多少”�
 
 ## 6. 当前推荐的损失与输出
 
+结论：可以、也应该用交叉熵损失来优化模型，但它应作为三分类辅助目标，而不是替代当前的连续 log-ratio 回归主目标。
+
+原因是当前模型同时有两个需求：
+
+1. 单程序锚点评分需要连续的倍率估计，因此必须保留回归头。
+2. `O1-O2`、`O2-O3` 这类近邻 pair 的核心难点是方向和 tie 边界，交叉熵比纯回归误差更直接地约束这一部分。
+
 ### 回归头
 
 输出：
@@ -123,7 +130,7 @@ $$
 \hat{y}_{i,j} \approx \log \frac{C^{iter}_j}{C^{iter}_i}
 $$
 
-建议继续作为主头，因为当前单程序评分就是在这个量上聚合的。
+建议继续作为主头，因为当前单程序评分就是在这个量上聚合的。训练时继续使用 Huber 或加权 Huber 做主损失，并对 `tie` / `near_tie` 样本降低回归权重，避免模型为了拟合接近 0 的噪声标签而牺牲明显非 tie 样本。
 
 ### 分类头
 
@@ -133,7 +140,62 @@ $$
 2. `tie`
 3. `j_better`
 
-建议作为辅助头或并行评估头，因为当前结果已经说明：方向判断往往比纯回归误差更能反映模型是否真正有用。
+建议将分类头作为默认辅助头训练，而不只是并行评估头。分类标签沿用当前 pair 表的三分类定义：
+
+1. `log_ratio > +0.05`：`i_better`
+2. `|log_ratio| <= 0.05`：`tie`
+3. `log_ratio < -0.05`：`j_better`
+
+分类头使用带类别权重的交叉熵：
+
+$$
+\mathcal{L}_{cls} =
+\operatorname{CE}\left(z_{i,j}, c_{i,j}; w_c\right)
+$$
+
+其中 $z_{i,j}$ 是三分类 logits，$c_{i,j}$ 是三分类标签，$w_c$ 用于缓解 `tie` 类和方向类的样本数差异。
+
+最终训练目标建议写成：
+
+$$
+\mathcal{L} =
+\mathcal{L}_{reg}
++ \lambda_{cls}\mathcal{L}_{cls}
++ \lambda_{dir}\mathcal{L}_{dir}
+$$
+
+当前阶段建议默认保留：
+
+1. `\lambda_{cls} > 0`，使用三分类交叉熵作为主要辅助目标；当前消融后建议默认 `\lambda_{cls}=0.05`。
+2. `\lambda_{dir} = 0`，旧版二分类方向 BCE 默认关闭，除非消融证明它额外有效。
+3. 早停和模型选择仍看合成验证损失，同时单独报告 `val_reg_loss`、`val_aux_class_loss`、`aux_acc_3cls` 和 `aux_tie_recall`。
+
+这样做的好处是：回归头继续给锚点评分提供连续尺度，分类头则专门改善方向、tie 判断和后续 scoring 阶段的 gating。当前结果已经支持这个判断：辅助分类头整体 `aux_acc_3cls` 高于由回归输出离散化得到的 `acc_3cls`，并且在 `O2-O3` 难 pair 上提供了更强的 tie 信号。
+
+### 当前交叉熵消融结果
+
+已新增 [scripts/run_transformer_objective_ablation.py](../../scripts/run_transformer_objective_ablation.py) 固化目标函数消融，结果写入 [train_set/transformer_objective_ablation.json](../../train_set/transformer_objective_ablation.json) 和 [train_set/objective_ablation.md](../../train_set/objective_ablation.md)。
+
+本轮固定 `fixed_work_transformer` 配置、CPU、`epochs=120`、`patience=30`，只扫 `aux_class_lambda ∈ {0, 0.05, 0.10, 0.20, 0.30}`，结论如下：
+
+| 目标 | λ_cls | test MAE | test R² | dir_acc | reg acc_3cls | aux_acc_3cls | aux_tie_recall | O2-O3 aux_acc |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 回归 only | 0.00 | 0.5829 | 0.8009 | 0.8971 | 0.7708 | 0.2667 | 0.4167 | 0.4000 |
+| 回归 + CE | 0.05 | 0.5677 | 0.8031 | 0.9069 | 0.7708 | 0.8417 | 0.7222 | 0.6000 |
+| 回归 + CE | 0.10 | 0.5625 | 0.8067 | 0.8922 | 0.7708 | 0.8375 | 0.6944 | 0.5500 |
+| 回归 + CE | 0.20 | 0.5748 | 0.8040 | 0.8922 | 0.7667 | 0.8375 | 0.6667 | 0.5500 |
+| 回归 + CE | 0.30 | 0.5738 | 0.8035 | 0.8873 | 0.7583 | 0.8292 | 0.5833 | 0.5500 |
+
+因此，这轮最稳的默认值不是更大的 CE 权重，而是小权重辅助：`aux_class_lambda=0.05`。它在不损害连续回归头的前提下，把 test `aux_acc_3cls` 从 `0.2667` 提升到 `0.8417`，把 `aux_tie_recall` 从 `0.4167` 提升到 `0.7222`，并把 `O2-O3` 的辅助分类准确率从 `0.4000` 提升到 `0.6000`。
+
+### 为什么不直接改成纯交叉熵
+
+纯交叉熵只能回答 `i_better / tie / j_better`，不能输出“优势有多大”。这会削弱两个已经落地的能力：
+
+1. 多锚点评分中的连续 log score 聚合。
+2. 分数与 proxy/time 真值之间的 MAE 和相关性评估。
+
+因此，交叉熵的正确位置是优化方向边界和 tie 边界，而不是取代单程序评分所需的连续倍率估计。
 
 ## 7. 单程序评分的当前最佳方案
 

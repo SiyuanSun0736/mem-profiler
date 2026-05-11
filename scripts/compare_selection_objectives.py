@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-compare_selection_objectives.py — score-first vs time-first 对比汇总
+compare_selection_objectives.py — score-first / time-first / time-aware 对比汇总
 ===================================================================
 
 目标
 ----
-1. 分别回放 `score_program.py` 的 score-first / time-first tuned 参数。
-2. 对两套结果分别执行 `evaluate_score_vs_time.py`。
+1. 分别回放 `score_program.py` 的 score-first / time-first / time-aware tuned 参数。
+2. 对各套结果分别执行 `evaluate_score_vs_time.py`。
 3. 生成一份机器可读 JSON 和一页 Markdown 对比表，便于选择默认口径。
 
 输出
@@ -18,6 +18,9 @@ compare_selection_objectives.py — score-first vs time-first 对比汇总
     scores_time_first.parquet
     score_eval_time_first.json
     score_time_eval_time_first.json
+    scores_time_aware.parquet
+    score_eval_time_aware.json
+    score_time_eval_time_aware.json
 
   train_set/score_selection_objective_comparison.json
   docs/new-repo-plan/08-score-selection-objective-comparison.md
@@ -122,6 +125,7 @@ def _build_reliability_table(tuned_data: dict[str, Any]) -> list[dict[str, Any]]
     for objective_key, section_key in (
         ("score_first", "best_for_score_by_variant"),
         ("time_first", "best_by_variant"),
+        ("time_aware", "best_time_aware_by_variant"),
     ):
         section = tuned_data.get(section_key, {})
         shared_best = (section.get("ALL") or {}).get("best")
@@ -190,17 +194,20 @@ def _write_markdown(
 ) -> None:
     score_eval = summary["objectives"]["score_first"]["score_eval"]
     time_eval = summary["objectives"]["time_first"]["score_eval"]
+    aware_eval = summary["objectives"].get("time_aware", {}).get("score_eval", {})
     score_time_eval = summary["objectives"]["score_first"]["score_time_eval"]
     time_time_eval = summary["objectives"]["time_first"]["score_time_eval"]
+    aware_time_eval = summary["objectives"].get("time_aware", {}).get("score_time_eval", {})
     recommendation = summary["recommendation"]
 
     score_all = ((tuned_data.get("best_for_score_by_variant") or {}).get("ALL") or {}).get("best", {})
     time_all = ((tuned_data.get("best_by_variant") or {}).get("ALL") or {}).get("best", {})
+    aware_all = ((tuned_data.get("best_time_aware_by_variant") or {}).get("ALL") or {}).get("best", {})
 
     lines: list[str] = []
-    lines.append("# score-first vs time-first 默认口径对比")
+    lines.append("# score-first / time-first / time-aware 默认口径对比")
     lines.append("")
-    lines.append(f"> 生成时间：{summary['generated_at']}  ")
+    lines.append(f"> 生成时间：{summary['generated_at']}")
     lines.append("> 生成脚本：scripts/compare_selection_objectives.py")
     lines.append("")
     lines.append("## 结论")
@@ -212,17 +219,18 @@ def _write_markdown(
     lines.append("")
     lines.append("## 一页总表")
     lines.append("")
-    lines.append("| 指标 | score-first | time-first | score-first - time-first | 更优口径 |")
-    lines.append("| --- | ---: | ---: | ---: | --- |")
+    lines.append("| 指标 | score-first | time-first | time-aware | score-first - time-first | 更优口径 |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | --- |")
     for row in summary["metrics"]:
+        aware_value = summary.get("time_aware_metrics", {}).get(row["metric"])
         lines.append(
-            f"| {row['metric']} | {_fmt_num(row['score_first'])} | {_fmt_num(row['time_first'])} | {_fmt_delta(row['delta_score_minus_time'], row['better'])} | {row['preferred']} |"
+            f"| {row['metric']} | {_fmt_num(row['score_first'])} | {_fmt_num(row['time_first'])} | {_fmt_num(aware_value) if aware_value is not None else '-'} | {_fmt_delta(row['delta_score_minus_time'], row['better'])} | {row['preferred']} |"
         )
     lines.append("")
     lines.append("## ALL 共享参数对比")
     lines.append("")
-    lines.append("| 参数 | score-first | time-first |")
-    lines.append("| --- | ---: | ---: |")
+    lines.append("| 参数 | score-first | time-first | time-aware |")
+    lines.append("| --- | ---: | ---: | ---: |")
     for key in (
         "tie_gate_threshold",
         "tie_shrink_power",
@@ -232,8 +240,30 @@ def _write_markdown(
         "anchor_outlier_min_delta",
     ):
         lines.append(
-            f"| {key} | {_fmt_num(score_all.get(key), 2)} | {_fmt_num(time_all.get(key), 2)} |"
+            f"| {key} | {_fmt_num(score_all.get(key), 2)} | {_fmt_num(time_all.get(key), 2)} | {_fmt_num(aware_all.get(key), 2)} |"
         )
+    if aware_eval and aware_time_eval:
+        lines.append("")
+        lines.append("## time-aware 结果")
+        lines.append("")
+        lines.append(
+            f"time-aware proxy: corr={_fmt_num(aware_eval.get('corr_score_log'))}, "
+            f"MAE={_fmt_num(aware_eval.get('mae_score_log'))}, "
+            f"band={_fmt_num(aware_eval.get('band_accuracy'))}."
+        )
+        lines.append(
+            f"time-aware strict time: corr={_fmt_num(aware_time_eval.get('corr_model_time'))}, "
+            f"spearman={_fmt_num(aware_time_eval.get('spearman_model'))}, "
+            f"MAE={_fmt_num(aware_time_eval.get('mae_model_time'))}, "
+            f"band={_fmt_num(aware_time_eval.get('band_acc_model'))}."
+        )
+        repeat = aware_time_eval.get("repeat_backed_only") or {}
+        if repeat:
+            lines.append(
+                f"time-aware repeat-backed: n={repeat.get('n')}, "
+                f"corr={_fmt_num(repeat.get('corr_model_time'))}, "
+                f"spearman={_fmt_num(repeat.get('spearman_model'))}."
+            )
     lines.append("")
     lines.append("## Variant-local tuned 可靠性")
     lines.append("")
@@ -294,6 +324,12 @@ def main() -> None:
             "score_eval": compare_dir / "score_eval_time_first.json",
             "score_time_eval": compare_dir / "score_time_eval_time_first.json",
         },
+        "time_aware": {
+            "selection": "time-aware",
+            "scores": compare_dir / "scores_time_aware.parquet",
+            "score_eval": compare_dir / "score_eval_time_aware.json",
+            "score_time_eval": compare_dir / "score_time_eval_time_aware.json",
+        },
     }
 
     for payload in objectives.values():
@@ -351,6 +387,20 @@ def main() -> None:
         _metric_row("time.band_acc_model", score_time_eval["band_acc_model"], time_time_eval["band_acc_model"], "higher"),
         _metric_row("coverage.n_valid_strict", score_time_eval["n_valid_strict"], time_time_eval["n_valid_strict"], "higher"),
     ]
+    aware_eval = summary["objectives"].get("time_aware", {}).get("score_eval", {})
+    aware_time_eval = summary["objectives"].get("time_aware", {}).get("score_time_eval", {})
+    summary["time_aware_metrics"] = {
+        "proxy.corr_score_log": aware_eval.get("corr_score_log"),
+        "proxy.mae_score_log": aware_eval.get("mae_score_log"),
+        "proxy.dir_accuracy": aware_eval.get("dir_accuracy"),
+        "proxy.band_accuracy": aware_eval.get("band_accuracy"),
+        "time.corr_model_time": aware_time_eval.get("corr_model_time"),
+        "time.spearman_model": aware_time_eval.get("spearman_model"),
+        "time.mae_model_time": aware_time_eval.get("mae_model_time"),
+        "time.dir_acc_model": aware_time_eval.get("dir_acc_model"),
+        "time.band_acc_model": aware_time_eval.get("band_acc_model"),
+        "coverage.n_valid_strict": aware_time_eval.get("n_valid_strict"),
+    }
 
     summary["recommendation"] = _recommend_default(score_eval, score_time_eval, time_eval, time_time_eval)
     reliability_rows = _build_reliability_table(tuned_data)
