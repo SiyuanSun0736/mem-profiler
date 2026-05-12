@@ -437,11 +437,11 @@ dataset-first-optimization-plan/
 
 目标：在 `aux_class_lambda=0.05` 已经稳定后，继续提升单程序评分，尤其是 strict time 外部一致性。
 
-详细方案见 [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)。当前 `A1` 已完成首轮 focused retune，并新增可切换的 `time-aware` 口径；`A2` 也已完成首轮 slope-only calibration 实验，结论是 pairwise MAE 有收益，但单程序 band 会下降，因此只保留为可选后处理。继续建议做下面几项：
+详细方案见 [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)。当前 `A1` 已完成首轮 focused retune，并新增可切换的 `time-aware` 口径；`A2` 也已完成首轮 slope-only calibration 实验，结论是 pairwise MAE 有收益，但单程序 band 会下降，因此只保留为可选后处理；`A3` 已完成首轮 MC dropout uncertainty-aware anchor weighting 扫描，结论是轻量权重能改善 proxy/time Pearson，但会增加推理成本并轻微牺牲 strict time band/MAE，因此也只保留为显式优化和诊断开关。继续建议做下面几项：
 
-1. `A3` uncertainty-aware anchor weighting：用多 seed 或 MC dropout 给锚点估计加方差权重。
-2. `A4` pair-specific tie threshold：为 `O1-O2`、`O2-O3` 这类 near-tie pair 单独调 tie 阈值。
-3. `A2` anchor-aware calibration：把校准目标从 pairwise MAE 改成锚点聚合后的 band / score。
+1. `A4` pair-specific tie threshold：为 `O1-O2`、`O2-O3` 这类 near-tie pair 单独调 tie 阈值。
+2. `A2` anchor-aware calibration：把校准目标从 pairwise MAE 改成锚点聚合后的 band / score。
+3. `B4` quality-weighted training：把 run 质量接入回归和 CE loss。
 4. 后续新增 repeat timing 后，再扩大 `A1` time-aware 网格重跑。
 
 完成标准：
@@ -456,6 +456,13 @@ A2 首轮实测记录：
 1. slope-only per-pair calibration 让 pairwise test MAE 从 `0.5678` 降到 `0.5227`。
 2. 单程序 blend `0.05` 时，proxy Pearson 从 `0.9072` 提到 `0.9096`，strict time Pearson 从 `0.3980` 提到 `0.4007`。
 3. 但同一口径下 band accuracy 从 `0.8048` 降到 `0.7888`，所以默认仍保持 `--pair-calibration-blend 0.0`。
+
+A3 首轮实测记录：
+
+1. 新增 `--uncertainty-samples`、`--uncertainty-dropout`、`--uncertainty-weight-lambda` 等参数，并新增 `scripts/compare_uncertainty_anchor_weighting.py` 扫描脚本。
+2. MC dropout `samples=6/dropout=0.10/eps=0.01` 下，保守推荐 `lambda=0.02`：proxy Pearson 从 `0.9072` 到 `0.9083`，MAE 从 `0.2723` 到 `0.2713`，strict time Pearson 从 `0.3980` 到 `0.3998`，且 proxy 方向准确率和 band accuracy 保持 `0.7807` / `0.8048` 不变。
+3. `lambda=0.05` 对档位更友好：proxy `band_accuracy` 从 `0.8048` 到 `0.8128`，同时 strict time Pearson 到 `0.4014`。
+4. 但所有非零 lambda 的 strict time band 都从 `0.6150` 降到 `0.6122` 或更低，且开启 MC dropout 会增加推理成本，所以默认仍保持 `--uncertainty-weight-lambda 0.0`。
 
 ### TODO 3. 单独做难样本误差分析
 

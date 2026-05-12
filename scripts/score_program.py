@@ -50,6 +50,12 @@ tie-aware 解码：
   # 强制 CPU
   python scripts/score_program.py --device cpu
 
+  # 打开 uncertainty-aware anchor weighting（MC dropout 估计 pair 方差）
+  python scripts/score_program.py \
+          --uncertainty-samples 6 \
+          --uncertainty-dropout 0.10 \
+          --uncertainty-weight-lambda 0.02
+
     # 若更关注时间外部验证而不是 proxy 评分，可切回 time-first / time-aware tuned 参数
     python scripts/score_program.py --tuned-selection-objective time
     python scripts/score_program.py --tuned-selection-objective time-aware
@@ -98,6 +104,8 @@ DEFAULT_PAIR_CALIBRATION_JSON = "train_set/pair_calibration.json"
 DEFAULT_MIN_RELIABLE_TUNE_SCORE_VALID = 32
 DEFAULT_MIN_RELIABLE_TUNE_TIME_VALID = 32
 DEFAULT_TUNED_SELECTION_OBJECTIVE = "score"
+DEFAULT_UNCERTAINTY_EPS = 0.01
+DEFAULT_UNCERTAINTY_DROPOUT = 0.10
 
 # ── 瓶颈归因特征分组 ───────────────────────────────────────────────────────────
 # 每组特征的 z-score 均值作为该类瓶颈的 severity（值越高压力越大）
@@ -532,7 +540,13 @@ def _resolve_scoring_params(
 
 # ── 模型加载 ───────────────────────────────────────────────────────────────────
 
-def load_model(model_path: pathlib.Path, device: torch.device) -> PairTransformer:
+def load_model(
+    model_path: pathlib.Path,
+    device: torch.device,
+    *,
+    inference_dropout: float = 0.0,
+    train_mode: bool = False,
+) -> PairTransformer:
     data = torch.load(model_path, map_location="cpu", weights_only=False)
     hparams = data.get("hparams", {})
     model = PairTransformer(
@@ -541,7 +555,7 @@ def load_model(model_path: pathlib.Path, device: torch.device) -> PairTransforme
         nhead           = hparams.get("nhead",             2),
         num_layers      = hparams.get("nlayers", hparams.get("num_layers", 3)),
         dim_feedforward = hparams.get("ffn_dim", hparams.get("dim_feedforward", 256)),
-        dropout         = 0.0,  # 推理阶段关闭 dropout
+        dropout         = float(inference_dropout),
     )
     missing, unexpected = model.load_state_dict(data["model_state"], strict=False)
     allowed_missing = {k for k in missing if k.startswith("cls_head.")}
@@ -551,7 +565,10 @@ def load_model(model_path: pathlib.Path, device: torch.device) -> PairTransforme
             f"模型权重与当前结构不兼容: missing={list(missing)} unexpected={unexpected}"
         )
     model.to(device)
-    model.eval()
+    if train_mode:
+        model.train()
+    else:
+        model.eval()
     return model
 
 
@@ -559,6 +576,39 @@ def _to_tensor(feat_dict: dict[str, float], device: torch.device) -> torch.Tenso
     """将特征字典转为 (1, F) tensor。"""
     arr = np.array([feat_dict.get(c, 0.0) for c in NON_TIME_COLS], dtype=np.float32)
     return torch.from_numpy(arr).unsqueeze(0).to(device)
+
+
+@torch.no_grad()
+def _estimate_pair_uncertainty(
+    xi: torch.Tensor,
+    xj: torch.Tensor,
+    uncertainty_model: PairTransformer | None,
+    samples: int,
+) -> dict[str, float]:
+    if uncertainty_model is None or samples <= 1:
+        return {
+            "mean": float("nan"),
+            "std": 0.0,
+            "var": 0.0,
+        }
+
+    preds: list[float] = []
+    for _ in range(int(samples)):
+        pred, _ = uncertainty_model.forward_with_aux(xi, xj)
+        preds.append(float(pred.detach().cpu().item()))
+    arr = np.asarray(preds, dtype=np.float64)
+    if len(arr) == 0 or not np.isfinite(arr).all():
+        return {
+            "mean": float("nan"),
+            "std": 0.0,
+            "var": 0.0,
+        }
+    var = float(np.var(arr, ddof=1)) if len(arr) > 1 else 0.0
+    return {
+        "mean": float(np.mean(arr)),
+        "std": float(np.sqrt(max(var, 0.0))),
+        "var": max(var, 0.0),
+    }
 
 
 # ── 单次推断 ───────────────────────────────────────────────────────────────────
@@ -578,6 +628,10 @@ def predict_score(
     outlier_min_delta: float = DEFAULT_OUTLIER_MIN_DELTA,
     pair_calibrators: dict[str, dict[str, float]] | None = None,
     pair_calibration_blend: float = 1.0,
+    uncertainty_model: PairTransformer | None = None,
+    uncertainty_samples: int = 0,
+    uncertainty_weight_lambda: float = 0.0,
+    uncertainty_eps: float = DEFAULT_UNCERTAINTY_EPS,
 ) -> dict[str, Any]:
     """
     利用参考锚点法估算单程序优化分数。
@@ -588,12 +642,23 @@ def predict_score(
     返回：{score_log, score_100, band, anchor_details}
     """
     xi = _to_tensor(query_feat, device)
+    use_uncertainty = (
+        uncertainty_model is not None
+        and int(uncertainty_samples) > 1
+        and float(uncertainty_weight_lambda) > 0.0
+    )
 
     anchor_estimates = []
     for anc in anchors:
         xj = _to_tensor({c: float(anc.get(c, 0.0)) for c in NON_TIME_COLS}, device)
         pred_log_ratio, cls_logits = model.forward_with_aux(xi, xj)
         pred_log_ratio = float(pred_log_ratio.cpu().item())
+        uncertainty = _estimate_pair_uncertainty(
+            xi,
+            xj,
+            uncertainty_model,
+            int(uncertainty_samples),
+        ) if use_uncertainty else {"mean": float("nan"), "std": 0.0, "var": 0.0}
         calibrated_log_ratio, calibration_meta = _calibrate_pair_log_ratio(
             pred_log_ratio,
             query_variant=query_variant,
@@ -618,6 +683,15 @@ def predict_score(
         base_weight = anchor_quality * distance_weight * effective_confidence
         if anchor_quality < min_anchor_quality:
             base_weight = 0.0
+        uncertainty_multiplier = 1.0
+        if use_uncertainty:
+            uncertainty_multiplier = 1.0 / (
+                1.0
+                + float(uncertainty_weight_lambda)
+                * float(uncertainty["var"])
+                / max(float(uncertainty_eps), 1e-12)
+            )
+            base_weight *= uncertainty_multiplier
 
         gated_log_ratio = float(decoded["gated_log_ratio"])
         s_est = float(anc["score_gt"]) + gated_log_ratio
@@ -629,6 +703,9 @@ def predict_score(
             "class_confidence":  round(class_confidence, 4),
             "effective_confidence": round(effective_confidence, 4),
             "direction_margin":  round(direction_margin, 4),
+            "uncertainty_std":   round(float(uncertainty["std"]), 6),
+            "uncertainty_var":   round(float(uncertainty["var"]), 8),
+            "uncertainty_weight": round(float(uncertainty_multiplier), 6),
             "tie_prob":          round(float(decoded["tie_prob"]), 4),
             "decoded_class":     str(decoded["decoded_class"]),
             "model_log_ratio":   round(pred_log_ratio, 4),
@@ -665,10 +742,30 @@ def predict_score(
     else:
         final_score = float(np.average(estimates, weights=weights))
 
+    uncertainty_std_mean = 0.0
+    uncertainty_var_mean = 0.0
+    uncertainty_weight_mean = 1.0
+    if use_uncertainty and kept:
+        uncertainty_std_mean = float(np.mean([
+            float(e.get("uncertainty_std", 0.0) or 0.0)
+            for e in kept
+        ]))
+        uncertainty_var_mean = float(np.mean([
+            float(e.get("uncertainty_var", 0.0) or 0.0)
+            for e in kept
+        ]))
+        uncertainty_weight_mean = float(np.mean([
+            float(e.get("uncertainty_weight", 1.0) or 1.0)
+            for e in kept
+        ]))
+
     return {
         "score_log":     round(final_score, 4),
         "anchor_details": anchor_estimates,
         "n_anchors_used": len(kept),
+        "anchor_uncertainty_std_mean": round(uncertainty_std_mean, 6),
+        "anchor_uncertainty_var_mean": round(uncertainty_var_mean, 8),
+        "anchor_uncertainty_weight_mean": round(uncertainty_weight_mean, 6),
     }
 
 
@@ -696,6 +793,16 @@ def main() -> None:
                         help="per-pair calibration 混合强度；0=旧模型，1=全量校准")
     parser.add_argument("--disable-pair-calibration", action="store_true",
                         help="关闭 per-pair calibration，回到模型 raw log-ratio")
+    parser.add_argument("--uncertainty-samples", type=int, default=0,
+                        help="MC-dropout 采样次数；<=1 时关闭 uncertainty-aware anchor weighting")
+    parser.add_argument("--uncertainty-dropout", type=float, default=DEFAULT_UNCERTAINTY_DROPOUT,
+                        help="用于 MC-dropout 不确定性模型的 dropout 概率")
+    parser.add_argument("--uncertainty-weight-lambda", type=float, default=0.0,
+                        help="不确定性权重惩罚强度；0=关闭，越大越压低高方差锚点")
+    parser.add_argument("--uncertainty-eps", type=float, default=DEFAULT_UNCERTAINTY_EPS,
+                        help="方差归一化尺度，权重为 1/(1 + lambda * var / eps)")
+    parser.add_argument("--uncertainty-seed", type=int, default=42,
+                        help="MC-dropout 采样随机种子")
     parser.add_argument("--device",     default=None)
     parser.add_argument("--tie-gate-threshold", type=float, default=None,
                         help="辅助分类头判为 tie 时将回归输出压到 0 的阈值")
@@ -726,6 +833,22 @@ def main() -> None:
 
     device = select_device(args.device)
     model  = load_model(model_path, device)
+    uncertainty_enabled = (
+        int(args.uncertainty_samples) > 1
+        and float(args.uncertainty_weight_lambda) > 0.0
+    )
+    uncertainty_model: PairTransformer | None = None
+    if uncertainty_enabled:
+        torch.manual_seed(int(args.uncertainty_seed))
+        uncertainty_model = load_model(
+            model_path,
+            device,
+            inference_dropout=float(args.uncertainty_dropout),
+            train_mode=True,
+        )
+        torch.manual_seed(int(args.uncertainty_seed))
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(int(args.uncertainty_seed))
     tuned_defaults = _load_tuned_variant_defaults(
         tuned_defaults_path,
         selection_objective=args.tuned_selection_objective,
@@ -763,6 +886,15 @@ def main() -> None:
         )
     elif not args.disable_pair_calibration and pair_calibration_path.exists():
         print(f"[warn] pair calibration 文件存在但没有可用校准器: {pair_calibration_path}")
+    if uncertainty_enabled:
+        print(
+            "[info] 已启用 uncertainty-aware anchor weighting: "
+            f"samples={int(args.uncertainty_samples)}, "
+            f"dropout={float(args.uncertainty_dropout):.3f}, "
+            f"lambda={float(args.uncertainty_weight_lambda):.3f}, "
+            f"eps={float(args.uncertainty_eps):.5f}, "
+            f"seed={int(args.uncertainty_seed)}"
+        )
 
     # 读取 anchor stats（用于 0-100 归一化）
     stats_path = anchor_path.with_suffix(".stats.json")
@@ -824,6 +956,10 @@ def main() -> None:
             outlier_min_delta=scoring_params["anchor_outlier_min_delta"],
             pair_calibrators=pair_calibrators,
             pair_calibration_blend=pair_calibration_blend,
+            uncertainty_model=uncertainty_model,
+            uncertainty_samples=int(args.uncertainty_samples),
+            uncertainty_weight_lambda=float(args.uncertainty_weight_lambda),
+            uncertainty_eps=float(args.uncertainty_eps),
         )
 
         score_log = result["score_log"]
@@ -843,6 +979,15 @@ def main() -> None:
             "n_anchors_used": int(result.get("n_anchors_used", len(anchors))),
             "pair_calibration_enabled": bool(pair_calibrators and pair_calibration_blend > 0.0),
             "pair_calibration_blend": round(pair_calibration_blend, 4),
+            "uncertainty_weighting_enabled": bool(uncertainty_enabled),
+            "uncertainty_samples": int(args.uncertainty_samples) if uncertainty_enabled else 0,
+            "uncertainty_dropout": round(float(args.uncertainty_dropout), 4) if uncertainty_enabled else 0.0,
+            "uncertainty_weight_lambda": round(float(args.uncertainty_weight_lambda), 6)
+            if uncertainty_enabled else 0.0,
+            "uncertainty_eps": round(float(args.uncertainty_eps), 8) if uncertainty_enabled else 0.0,
+            "anchor_uncertainty_std_mean": float(result.get("anchor_uncertainty_std_mean", 0.0)),
+            "anchor_uncertainty_var_mean": float(result.get("anchor_uncertainty_var_mean", 0.0)),
+            "anchor_uncertainty_weight_mean": float(result.get("anchor_uncertainty_weight_mean", 1.0)),
             "scoring_param_resolution": json.dumps(scoring_param_meta, ensure_ascii=False),
             # 真值（用于评估）
             "score_gt":    float(
@@ -951,6 +1096,10 @@ def main() -> None:
             outlier_min_delta=scoring_params["anchor_outlier_min_delta"],
             pair_calibrators=pair_calibrators,
             pair_calibration_blend=pair_calibration_blend,
+            uncertainty_model=uncertainty_model,
+            uncertainty_samples=int(args.uncertainty_samples),
+            uncertainty_weight_lambda=float(args.uncertainty_weight_lambda),
+            uncertainty_eps=float(args.uncertainty_eps),
         )
         score_log   = result["score_log"]
         score_100   = _percentile_score(score_log, all_scores)
@@ -977,6 +1126,7 @@ def main() -> None:
                   f"raw={anc['model_log_ratio']:+.4f}  cal={anc['calibrated_log_ratio']:+.4f}  "
                   f"gated={anc['gated_log_ratio']:+.4f}  "
                   f"cls={anc['decoded_class']:8s}  p_tie={anc['tie_prob']:.3f}  "
+                  f"u_std={anc['uncertainty_std']:.4f}  u_w={anc['uncertainty_weight']:.3f}  "
                   f"w={anc['weight']:.3f}  anchor_S={anc['anchor_score_gt']:+.4f}  "
                   f"→ score_est={anc['score_estimate']:+.4f}")
         print(f"\n  瓶颈归因（Top 3）：")

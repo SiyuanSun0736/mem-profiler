@@ -114,14 +114,16 @@ $$
 
 当前锚点聚合已经使用质量、距离和分类置信度，但还没有显式使用模型不确定性。可以用轻量 ensemble 或 MC dropout 给每个 query-anchor pair 一个方差估计。
 
+状态：已完成首轮 MC dropout 扫描。新增 [scripts/compare_uncertainty_anchor_weighting.py](../../scripts/compare_uncertainty_anchor_weighting.py) 生成 [train_set/uncertainty_anchor_weighting_comparison.json](../../train_set/uncertainty_anchor_weighting_comparison.json) 和 [train_set/uncertainty_anchor_weighting_comparison.md](../../train_set/uncertainty_anchor_weighting_comparison.md)，并在 [scripts/score_program.py](../../scripts/score_program.py) 中加入 `--uncertainty-samples`、`--uncertainty-dropout`、`--uncertainty-weight-lambda`、`--uncertainty-eps` 和 `--uncertainty-seed`。默认 `--uncertainty-weight-lambda 0.0`，也就是不改变主线评分口径；保守推荐显式使用 `--uncertainty-weight-lambda 0.02`，当更关注单程序档位时可试 `0.05`。
+
 做法：
 
 1. 训练 3 到 5 个不同 seed 的 PairTransformer，或推理时打开 dropout 做 MC dropout。
 2. 对每个 anchor estimate 计算均值和方差。
-3. 锚点权重增加一项：
+3. 锚点权重增加一项不确定性惩罚：
 
 $$
-w' = \frac{w}{\epsilon + \sigma^2}
+w' = w \cdot \frac{1}{1 + \lambda \cdot \sigma^2 / \epsilon}
 $$
 
 4. 方差过大的 anchor estimate 直接降权或剔除。
@@ -133,6 +135,32 @@ $$
 3. 锚点间冲突大的样本能输出更低 confidence。
 
 这一步尤其适合单程序输出，因为它能把“不确定”从隐藏误差变成显式信号。
+
+首轮结果：
+
+1. 扫描配置：MC dropout `samples=6`，`dropout=0.10`，`eps=0.01`，`seed=42`，`lambda ∈ {0, 0.005, 0.01, 0.02, 0.05, 0.10, 0.25, 0.50, 1.00, 2.00}`。
+2. baseline `lambda=0`：proxy `corr_score_log = 0.9072`，`mae_score_log = 0.2723`，`band_accuracy = 0.8048`；strict time `corr_model_time = 0.3980`，`mae_model_time = 1.0945`，`band_acc_model = 0.6150`。
+3. 保守推荐 `lambda=0.02`：在不降低 proxy 方向准确率和 proxy band 的前提下，proxy Pearson 从 `0.9072` 到 `0.9083`，MAE 从 `0.2723` 到 `0.2713`，strict time Pearson 从 `0.3980` 到 `0.3998`，repeat-backed Pearson 从 `0.7880` 到 `0.7881`；代价是 strict time band 从 `0.6150` 到 `0.6122`，time MAE 从 `1.0945` 到 `1.0949`。
+4. 若更看重单程序档位，可选 `lambda=0.05`：proxy `band_accuracy = 0.8128`，同时 proxy Pearson `0.9093`、strict time Pearson `0.4014`，time MAE `1.0957`。
+5. 更大的 `lambda` 会继续提高 proxy/time Pearson，例如 `lambda=2.00` 达到 proxy Pearson `0.9126`、strict time Pearson `0.4050`，但 proxy 方向准确率从 `0.7807` 降到 `0.7674`，time MAE 升到 `1.1032` 且 strict time band 降到 `0.6094`，属于过强惩罚，不建议作为默认。
+6. 结论：A3 有实际收益，但默认仍保持关闭，原因是 MC dropout 会显著增加推理成本，且 strict time band/MAE 有轻微回退。它适合作为显式优化开关和诊断信号，输出 anchor 层面的 `uncertainty_std`、`uncertainty_var`、`uncertainty_weight`，以及 run 级别的平均不确定性列。
+
+复现命令：
+
+```bash
+.venv/bin/python scripts/compare_uncertainty_anchor_weighting.py \
+  --device cpu \
+  --samples 6 \
+  --dropout 0.1 \
+  --eps 0.01 \
+  --lambdas 0,0.005,0.01,0.02,0.05,0.1,0.25,0.5,1.0,2.0
+
+.venv/bin/python scripts/score_program.py \
+  --device cpu \
+  --uncertainty-samples 6 \
+  --uncertainty-dropout 0.1 \
+  --uncertainty-weight-lambda 0.02
+```
 
 ### A4. Tie threshold tuning by pair type
 
@@ -291,13 +319,13 @@ $$
 
 下一轮建议按下面顺序推进：
 
-1. A3：接入 uncertainty-aware anchor weighting，让单程序输出有 confidence，并尝试降低 A2 暴露出的锚点尺度过冲。
-2. A4：尝试 pair-specific tie threshold，专攻 `O2-O3`。
-3. A2：若继续推进，应改成 anchor-aware calibration，而不是只拟合 pairwise raw 输出。
+1. A4：尝试 pair-specific tie threshold，专攻 `O2-O3`。
+2. A2：若继续推进，应改成 anchor-aware calibration，而不是只拟合 pairwise raw 输出。
+3. B4：把质量权重接入训练，减少低质量样本对边界的干扰。
 4. A1：在新增 repeat timing 或扩展 strict time 样本后，再扩大 time-aware 网格重跑。
-5. B4：把质量权重接入训练，减少低质量样本对边界的干扰。
-6. B3：只有当 strict time 样本继续增加后，再做 time distillation head。
-7. B1/B2：如果排序和 band 仍不稳，再加入 ordinal / ranking 目标。
+5. B3：只有当 strict time 样本继续增加后，再做 time distillation head。
+6. B1/B2：如果排序和 band 仍不稳，再加入 ordinal / ranking 目标。
+7. A3：已接入 MC dropout 版本；短期用 `lambda=0.02` 做保守显式消融或诊断，用 `lambda=0.05` 做偏档位的消融；除非后续改成多 seed ensemble 或用 held-out residual 校准不确定性，否则不放进默认路径。
 8. C 类方案只在上述方法收益耗尽后再做。
 
 当前最不建议马上做的是直接堆更大的 Transformer。原因是现在主要瓶颈不在 backbone 容量，而在 time 目标对齐、near-tie 标签、锚点聚合和样本质量。
