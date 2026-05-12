@@ -73,6 +73,8 @@ $$
 
 当前所有 variant pair 共用同一个回归输出尺度，但 `O0-O3` 和 `O2-O3` 的误差结构明显不同。可以在模型输出后加轻量校准层，不动主模型。
 
+状态：已完成首轮 slope-only 校准实验。新增 [scripts/fit_pair_calibration.py](../../scripts/fit_pair_calibration.py) 生成 [train_set/pair_calibration.json](../../train_set/pair_calibration.json) 和 [train_set/pair_calibration_report.md](../../train_set/pair_calibration_report.md)，并在 [scripts/score_program.py](../../scripts/score_program.py) 中加入 `--pair-calibration-blend` 可选开关。默认 blend 仍为 `0.0`，也就是不改变主线评分口径。
+
 做法：
 
 1. 对每个 variant pair 学一个校准函数：
@@ -83,7 +85,7 @@ $$
 
 其中 $p \in \{O0\text{-}O1, O0\text{-}O2, O0\text{-}O3, O1\text{-}O2, O1\text{-}O3, O2\text{-}O3\}$。
 
-2. `a_p` 和 `b_p` 只在 validation split 上拟合。
+2. 首轮默认使用 slope-only，也就是 `b_p = 0`，避免把 O0 基线整体推离 0 点；`--mode affine` 仅保留为探索选项。
 3. 对样本少或不稳定的 pair 回退到全局校准。
 4. 推理时根据 query-anchor 的 variant pair 应用校准，再进入锚点评分。
 
@@ -93,7 +95,20 @@ $$
 2. 单程序 `mae_score_log` 下降。
 3. strict time 指标不下降。
 
-这一步成本低，适合先作为后处理脚本实现。
+首轮结果：
+
+1. pairwise test MAE 从 `0.5678` 降到 `0.5227`，方向准确率保持 `0.9020`；说明 per-pair 尺度确实有偏差。
+2. 但全量接入单程序评分会造成分数尺度过冲：blend `1.0` 时 proxy `mae_score_log = 0.5570`，`band_accuracy = 0.6283`，不适合作为默认。
+3. 低强度 blend 有折中收益：blend `0.05` 时 proxy Pearson 从 `0.9072` 到 `0.9096`，MAE 从 `0.2723` 到 `0.2715`，strict time Pearson 从 `0.3980` 到 `0.4007`，repeat-backed Pearson 从 `0.7881` 到 `0.7905`；代价是 `band_accuracy` 从 `0.8048` 降到 `0.7888`。
+4. 结论：A2 适合作为 ranking/time 倾向的可选后处理，不适合替换默认 score-first 口径。后续如果要默认启用，需要把校准目标改成直接约束单程序 band 或锚点聚合后的分数，而不是只优化 pairwise MAE。
+
+复现命令：
+
+```bash
+.venv/bin/python scripts/fit_pair_calibration.py --device cpu
+.venv/bin/python scripts/compare_pair_calibration_blends.py --device cpu
+.venv/bin/python scripts/score_program.py --device cpu --pair-calibration-blend 0.05
+```
 
 ### A3. Uncertainty-aware anchor weighting
 
@@ -276,9 +291,9 @@ $$
 
 下一轮建议按下面顺序推进：
 
-1. A2：先做 per-pair calibration，低成本修正不同 pair 的尺度偏差。
-2. A3：接入 uncertainty-aware anchor weighting，让单程序输出有 confidence。
-3. A4：尝试 pair-specific tie threshold，专攻 `O2-O3`。
+1. A3：接入 uncertainty-aware anchor weighting，让单程序输出有 confidence，并尝试降低 A2 暴露出的锚点尺度过冲。
+2. A4：尝试 pair-specific tie threshold，专攻 `O2-O3`。
+3. A2：若继续推进，应改成 anchor-aware calibration，而不是只拟合 pairwise raw 输出。
 4. A1：在新增 repeat timing 或扩展 strict time 样本后，再扩大 time-aware 网格重跑。
 5. B4：把质量权重接入训练，减少低质量样本对边界的干扰。
 6. B3：只有当 strict time 样本继续增加后，再做 time distillation head。

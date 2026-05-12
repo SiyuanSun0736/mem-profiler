@@ -1,0 +1,109 @@
+{
+  "generated_at": "2026-05-11 15:03:43 UTC",
+  "rows": [
+    {
+      "blend": 0.0,
+      "scores": "train_set/pair_calibration_blends/scores_blend_0p0.parquet",
+      "score_eval": "train_set/pair_calibration_blends/score_eval_blend_0p0.json",
+      "time_eval": "train_set/pair_calibration_blends/score_time_eval_blend_0p0.json",
+      "proxy_corr": 0.9072,
+      "proxy_mae": 0.2723,
+      "proxy_band_acc": 0.8048,
+      "time_corr": 0.397978,
+      "time_mae": 1.094715,
+      "time_band_acc": 0.614958,
+      "repeat_corr": 0.78805
+    },
+    {
+      "blend": 0.05,
+      "scores": "train_set/pair_calibration_blends/scores_blend_0p05.parquet",
+      "score_eval": "train_set/pair_calibration_blends/score_eval_blend_0p05.json",
+      "time_eval": "train_set/pair_calibration_blends/score_time_eval_blend_0p05.json",
+      "proxy_corr": 0.9096,
+      "proxy_mae": 0.2715,
+      "proxy_band_acc": 0.7888,
+      "time_corr": 0.400698,
+      "time_mae": 1.106228,
+      "time_band_acc": 0.609418,
+      "repeat_corr": 0.790548
+    },
+    {
+      "blend": 0.1,
+      "scores": "train_set/pair_calibration_blends/scores_blend_0p1.parquet",
+      "score_eval": "train_set/pair_calibration_blends/score_eval_blend_0p1.json",
+      "time_eval": "train_set/pair_calibration_blends/score_time_eval_blend_0p1.json",
+      "proxy_corr": 0.9117,
+      "proxy_mae": 0.2753,
+      "proxy_band_acc": 0.7567,
+      "time_corr": 0.403239,
+      "time_mae": 1.119385,
+      "time_band_acc": 0.612188,
+      "repeat_corr": 0.792764
+    },
+    {
+      "blend": 0.2,
+      "scores": "train_set/pair_calibration_blends/scores_blend_0p2.parquet",
+      "score_eval": "train_set/pair_calibration_blends/score_eval_blend_0p2.json",
+      "time_eval": "train_set/pair_calibration_blends/score_time_eval_blend_0p2.json",
+      "proxy_corr": 0.915,
+      "proxy_mae": 0.2928,
+      "proxy_band_acc": 0.7086,
+      "time_corr": 0.407829,
+      "time_mae": 1.151806,
+      "time_band_acc": 0.612188,
+      "repeat_corr": 0.79644
+    },
+    {
+      "blend": 0.3,
+      "scores": "train_set/pair_calibration_blends/scores_blend_0p3.parquet",
+      "score_eval": "train_set/pair_calibration_blends/score_eval_blend_0p3.json",
+      "time_eval": "train_set/pair_calibration_blends/score_time_eval_blend_0p3.json",
+      "proxy_corr": 0.9173,
+      "proxy_mae": 0.317,
+      "proxy_band_acc": 0.7032,
+      "time_corr": 0.411816,
+      "time_mae": 1.18716,
+      "time_band_acc": 0.609418,
+      "repeat_corr": 0.799238
+    },
+    {
+      "blend": 0.5,
+      "scores": "train_set/pair_calibration_blends/scores_blend_0p5.parquet",
+      "score_eval": "train_set/pair_calibration_blends/score_eval_blend_0p5.json",
+      "time_eval": "train_set/pair_calibration_blends/score_time_eval_blend_0p5.json",
+      "proxy_corr": 0.9196,
+      "proxy_mae": 0.375,
+      "proxy_band_acc": 0.6684,
+      "time_corr": 0.418242,
+      "time_mae": 1.262489,
+      "time_band_acc": 0.614958,
+      "repeat_corr": 0.802723
+    },
+    {
+      "blend": 1.0,
+      "scores": "train_set/pair_calibration_blends/scores_blend_1p0.parquet",
+      "score_eval": "train_set/pair_calibration_blends/score_eval_blend_1p0.json",
+      "time_eval": "train_set/pair_calibration_blends/score_time_eval_blend_1p0.json",
+      "proxy_corr": 0.9161,
+      "proxy_mae": 0.557,
+      "proxy_band_acc": 0.6283,
+      "time_corr": 0.427746,
+      "time_mae": 1.46748,
+      "time_band_acc": 0.603878,
+      "repeat_corr": 0.803543
+    }
+  ],
+  "recommended": {
+    "blend": 0.0,
+    "scores": "train_set/pair_calibration_blends/scores_blend_0p0.parquet",
+    "score_eval": "train_set/pair_calibration_blends/score_eval_blend_0p0.json",
+    "time_eval": "train_set/pair_calibration_blends/score_time_eval_blend_0p0.json",
+    "proxy_corr": 0.9072,
+    "proxy_mae": 0.2723,
+    "proxy_band_acc": 0.8048,
+    "time_corr": 0.397978,
+    "time_mae": 1.094715,
+    "time_band_acc": 0.614958,
+    "repeat_corr": 0.78805
+  }
+}

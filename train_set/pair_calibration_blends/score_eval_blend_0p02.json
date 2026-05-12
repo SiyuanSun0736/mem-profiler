@@ -1,0 +1,8 @@
+{
+  "n_runs": 509,
+  "n_with_gt": 374,
+  "mae_score_log": 0.2706,
+  "corr_score_log": 0.9083,
+  "dir_accuracy": 0.7941,
+  "band_accuracy": 0.7888
+}

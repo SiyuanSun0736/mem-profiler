@@ -94,6 +94,7 @@ DEFAULT_MIN_ANCHOR_QUALITY = 0.30
 DEFAULT_OUTLIER_MAD_SCALE = 3.0
 DEFAULT_OUTLIER_MIN_DELTA = 0.35
 DEFAULT_TUNED_DEFAULTS_JSON = "train_set/score_tune_fine_variant_best.json"
+DEFAULT_PAIR_CALIBRATION_JSON = "train_set/pair_calibration.json"
 DEFAULT_MIN_RELIABLE_TUNE_SCORE_VALID = 32
 DEFAULT_MIN_RELIABLE_TUNE_TIME_VALID = 32
 DEFAULT_TUNED_SELECTION_OBJECTIVE = "score"
@@ -226,6 +227,72 @@ def _variant_distance_weight(query_variant: str, anchor_variant: str) -> float:
         return 1.0
     distance = abs(q_rank - a_rank)
     return max(0.55, 1.0 - 0.15 * distance)
+
+
+def _canonical_pair(variant_i: str, variant_j: str) -> tuple[str, int]:
+    i_rank = VARIANT_RANK.get(str(variant_i), 999)
+    j_rank = VARIANT_RANK.get(str(variant_j), 999)
+    if (i_rank, str(variant_i)) <= (j_rank, str(variant_j)):
+        return f"{variant_i}-{variant_j}", 1
+    return f"{variant_j}-{variant_i}", -1
+
+
+def _load_pair_calibration(path: pathlib.Path) -> dict[str, dict[str, float]]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception as exc:
+        print(f"[warn] 读取 pair calibration 失败: {path} ({exc})")
+        return {}
+    raw = data.get("calibrators")
+    if not isinstance(raw, dict):
+        return {}
+
+    calibrators: dict[str, dict[str, float]] = {}
+    for key, payload in raw.items():
+        if not isinstance(payload, dict) or not payload.get("enabled", False):
+            continue
+        try:
+            a = float(payload.get("a", 1.0))
+            b = float(payload.get("b", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(a) and math.isfinite(b):
+            calibrators[str(key)] = {"a": a, "b": b}
+    return calibrators
+
+
+def _calibrate_pair_log_ratio(
+    pred_log_ratio: float,
+    query_variant: str,
+    anchor_variant: str,
+    pair_calibrators: dict[str, dict[str, float]] | None,
+    pair_calibration_blend: float = 1.0,
+) -> tuple[float, dict[str, Any]]:
+    blend = float(np.clip(pair_calibration_blend, 0.0, 1.0))
+    pair_key, sign = _canonical_pair(query_variant, anchor_variant)
+    payload = (pair_calibrators or {}).get(pair_key)
+    if not payload or blend <= 0.0:
+        return float(pred_log_ratio), {
+            "pair_key": pair_key,
+            "enabled": False,
+            "a": 1.0,
+            "b": 0.0,
+            "blend": blend,
+        }
+
+    pred_canon = float(sign) * float(pred_log_ratio)
+    calibrated_canon = float(payload["a"]) * pred_canon + float(payload["b"])
+    blended_canon = (1.0 - blend) * pred_canon + blend * calibrated_canon
+    calibrated = float(sign) * blended_canon
+    return calibrated, {
+        "pair_key": pair_key,
+        "enabled": True,
+        "a": float(payload["a"]),
+        "b": float(payload["b"]),
+        "blend": blend,
+    }
 
 
 def _pair_vote_confidence(
@@ -509,6 +576,8 @@ def predict_score(
     min_anchor_quality: float = DEFAULT_MIN_ANCHOR_QUALITY,
     outlier_mad_scale: float = DEFAULT_OUTLIER_MAD_SCALE,
     outlier_min_delta: float = DEFAULT_OUTLIER_MIN_DELTA,
+    pair_calibrators: dict[str, dict[str, float]] | None = None,
+    pair_calibration_blend: float = 1.0,
 ) -> dict[str, Any]:
     """
     利用参考锚点法估算单程序优化分数。
@@ -525,8 +594,15 @@ def predict_score(
         xj = _to_tensor({c: float(anc.get(c, 0.0)) for c in NON_TIME_COLS}, device)
         pred_log_ratio, cls_logits = model.forward_with_aux(xi, xj)
         pred_log_ratio = float(pred_log_ratio.cpu().item())
-        decoded = _decode_pair_log_ratio(
+        calibrated_log_ratio, calibration_meta = _calibrate_pair_log_ratio(
             pred_log_ratio,
+            query_variant=query_variant,
+            anchor_variant=str(anc.get("variant", "")),
+            pair_calibrators=pair_calibrators,
+            pair_calibration_blend=pair_calibration_blend,
+        )
+        decoded = _decode_pair_log_ratio(
+            calibrated_log_ratio,
             cls_logits,
             tie_gate_threshold=tie_gate_threshold,
             tie_shrink_power=tie_shrink_power,
@@ -556,6 +632,12 @@ def predict_score(
             "tie_prob":          round(float(decoded["tie_prob"]), 4),
             "decoded_class":     str(decoded["decoded_class"]),
             "model_log_ratio":   round(pred_log_ratio, 4),
+            "calibrated_log_ratio": round(float(calibrated_log_ratio), 4),
+            "calibration_pair":   calibration_meta["pair_key"],
+            "calibration_enabled": bool(calibration_meta["enabled"]),
+            "calibration_a":      round(float(calibration_meta["a"]), 6),
+            "calibration_b":      round(float(calibration_meta["b"]), 6),
+            "calibration_blend":  round(float(calibration_meta["blend"]), 6),
             "gated_log_ratio":   round(gated_log_ratio, 4),
             "score_estimate_raw": round(s_est, 6),
             "score_estimate":    round(s_est, 4),
@@ -608,6 +690,12 @@ def main() -> None:
     parser.add_argument("--tuned-selection-objective", choices=["score", "time", "time-aware"],
                         default=DEFAULT_TUNED_SELECTION_OBJECTIVE,
                         help="从 tuned JSON 中选择 score-first、time-first 或 time-aware 的最优参数")
+    parser.add_argument("--pair-calibration-json", default=DEFAULT_PAIR_CALIBRATION_JSON,
+                        help="per-pair 线性校准 JSON；存在时默认启用")
+    parser.add_argument("--pair-calibration-blend", type=float, default=0.0,
+                        help="per-pair calibration 混合强度；0=旧模型，1=全量校准")
+    parser.add_argument("--disable-pair-calibration", action="store_true",
+                        help="关闭 per-pair calibration，回到模型 raw log-ratio")
     parser.add_argument("--device",     default=None)
     parser.add_argument("--tie-gate-threshold", type=float, default=None,
                         help="辅助分类头判为 tie 时将回归输出压到 0 的阈值")
@@ -630,6 +718,7 @@ def main() -> None:
     zscore_path = (REPO_ROOT / args.zscore).resolve()
     out_path    = (REPO_ROOT / args.output).resolve()
     tuned_defaults_path = (REPO_ROOT / args.tuned_defaults_json).resolve()
+    pair_calibration_path = (REPO_ROOT / args.pair_calibration_json).resolve()
 
     for p in (model_path, anchor_path, zscore_path):
         if not p.exists():
@@ -641,6 +730,12 @@ def main() -> None:
         tuned_defaults_path,
         selection_objective=args.tuned_selection_objective,
     )
+    pair_calibrators = (
+        {}
+        if args.disable_pair_calibration
+        else _load_pair_calibration(pair_calibration_path)
+    )
+    pair_calibration_blend = 0.0 if args.disable_pair_calibration else float(np.clip(args.pair_calibration_blend, 0.0, 1.0))
     cli_overrides = {
         "tie_gate_threshold": args.tie_gate_threshold,
         "tie_shrink_power": args.tie_shrink_power,
@@ -660,6 +755,14 @@ def main() -> None:
             f"[info] 已加载 variant 默认参数: {available_variants} "
             f"(objective={args.tuned_selection_objective})"
         )
+    if pair_calibrators:
+        print(
+            f"[info] 已加载 per-pair calibration: {len(pair_calibrators)} pairs "
+            f"({pair_calibration_path.relative_to(REPO_ROOT)}), "
+            f"blend={pair_calibration_blend:.3f}"
+        )
+    elif not args.disable_pair_calibration and pair_calibration_path.exists():
+        print(f"[warn] pair calibration 文件存在但没有可用校准器: {pair_calibration_path}")
 
     # 读取 anchor stats（用于 0-100 归一化）
     stats_path = anchor_path.with_suffix(".stats.json")
@@ -719,6 +822,8 @@ def main() -> None:
             min_anchor_quality=scoring_params["min_anchor_quality"],
             outlier_mad_scale=scoring_params["anchor_outlier_mad_scale"],
             outlier_min_delta=scoring_params["anchor_outlier_min_delta"],
+            pair_calibrators=pair_calibrators,
+            pair_calibration_blend=pair_calibration_blend,
         )
 
         score_log = result["score_log"]
@@ -736,6 +841,8 @@ def main() -> None:
             "band":        band,
             "n_anchors":   len(anchors),
             "n_anchors_used": int(result.get("n_anchors_used", len(anchors))),
+            "pair_calibration_enabled": bool(pair_calibrators and pair_calibration_blend > 0.0),
+            "pair_calibration_blend": round(pair_calibration_blend, 4),
             "scoring_param_resolution": json.dumps(scoring_param_meta, ensure_ascii=False),
             # 真值（用于评估）
             "score_gt":    float(
@@ -825,7 +932,7 @@ def main() -> None:
         qrow = qrow_matches.iloc[0]
         query_feat  = {c: float(qrow.get(c, 0.0)) for c in NON_TIME_COLS}
         anchors     = [a for a in anchor_map.get(args.program, []) if a["variant"] != variant]
-        scoring_params = _resolve_scoring_params(
+        scoring_params, _ = _resolve_scoring_params(
             query_variant=variant,
             cli_overrides=cli_overrides,
             tuned_defaults=tuned_defaults,
@@ -842,6 +949,8 @@ def main() -> None:
             min_anchor_quality=scoring_params["min_anchor_quality"],
             outlier_mad_scale=scoring_params["anchor_outlier_mad_scale"],
             outlier_min_delta=scoring_params["anchor_outlier_min_delta"],
+            pair_calibrators=pair_calibrators,
+            pair_calibration_blend=pair_calibration_blend,
         )
         score_log   = result["score_log"]
         score_100   = _percentile_score(score_log, all_scores)
@@ -865,7 +974,8 @@ def main() -> None:
         for anc in result["anchor_details"]:
             used_mark = "*" if anc.get("used") else "x"
             print(f"    [{used_mark}] vs {anc['anchor_variant']:3s}  "
-                  f"raw={anc['model_log_ratio']:+.4f}  gated={anc['gated_log_ratio']:+.4f}  "
+                  f"raw={anc['model_log_ratio']:+.4f}  cal={anc['calibrated_log_ratio']:+.4f}  "
+                  f"gated={anc['gated_log_ratio']:+.4f}  "
                   f"cls={anc['decoded_class']:8s}  p_tie={anc['tie_prob']:.3f}  "
                   f"w={anc['weight']:.3f}  anchor_S={anc['anchor_score_gt']:+.4f}  "
                   f"→ score_est={anc['score_estimate']:+.4f}")
