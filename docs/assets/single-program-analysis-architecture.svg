@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="1380" viewBox="0 0 980 1380" role="img" aria-labelledby="title desc">
+  <title id="title">Single-program analysis vertical flowchart</title>
+  <desc id="desc">Vertical flowchart describing methods and algorithms used in the single-program analysis path.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 30px Arial, Helvetica, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px Arial, Helvetica, sans-serif; fill: #334155; }
+      .frame { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; }
+      .box { stroke-width: 2.5; rx: 18; ry: 18; }
+      .box-a { fill: #dbeafe; stroke: #2563eb; }
+      .box-b { fill: #cffafe; stroke: #0891b2; }
+      .box-c { fill: #d1fae5; stroke: #059669; }
+      .box-d { fill: #fef3c7; stroke: #d97706; }
+      .box-e { fill: #ffe4e6; stroke: #e11d48; }
+      .head { font: 700 20px Arial, Helvetica, sans-serif; fill: #0f172a; }
+      .text { font: 400 14px Arial, Helvetica, sans-serif; fill: #334155; }
+      .note { font: 400 12px Arial, Helvetica, sans-serif; fill: #475569; }
+      .arrow { stroke: #1e293b; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .guide { stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 8 8; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e293b" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="980" height="1380" rx="24" ry="24" />
+  <rect class="frame" x="34" y="34" width="912" height="1312" rx="24" ry="24" />
+
+  <text class="title" x="60" y="78">单程序分析流程图</text>
+  <text class="subtitle" x="60" y="106">只描述方法与算法：从在线观测到热点、归因和报告</text>
+
+  <line class="guide" x1="490" y1="138" x2="490" y2="1290" />
+
+  <rect class="box box-a" x="190" y="150" width="600" height="122" />
+  <text class="head" x="230" y="190">1. 目标进程选择与观测控制</text>
+  <text class="text" x="230" y="216">对目标进程或进程族建立持续观测窗口</text>
+  <text class="text" x="230" y="238">方法：按 PID 或进程名过滤、固定时间窗采样、周期性采集</text>
+  <text class="note" x="230" y="260">算法：目标过滤、固定窗口采样、周期排空</text>
+
+  <path class="arrow" d="M490 272 L490 332" />
+
+  <rect class="box box-b" x="190" y="332" width="600" height="152" />
+  <text class="head" x="230" y="374">2. 多源访存事件采集</text>
+  <text class="text" x="230" y="398">在内核侧同时观测不同类型的访存相关事件</text>
+  <text class="text" x="230" y="422">方法：PMU 计数、page fault 跟踪、内存系统调用跟踪</text>
+  <text class="note" x="230" y="446">算法：perf_event、kprobe、ring buffer、LBR branch sampling</text>
+  <text class="text" x="230" y="470">核心思想：把 cache、TLB、fault 与内存管理行为放到同一观测平面</text>
+
+  <path class="arrow" d="M490 484 L490 544" />
+
+  <rect class="box box-c" x="190" y="544" width="600" height="140" />
+  <text class="head" x="230" y="586">3. 窗口化差分聚合</text>
+  <text class="text" x="230" y="612">把连续事件流压缩为稳定的窗口级统计快照</text>
+  <text class="text" x="230" y="634">方法：时间窗切分、计数差分、按 PID 或 TID 聚合</text>
+  <text class="note" x="230" y="656">算法：counter delta、window slicing、group-by aggregation</text>
+  <text class="text" x="230" y="678">输出语义：窗口级主表 + 可选事件级证据流</text>
+
+  <path class="arrow" d="M490 684 L490 744" />
+
+  <rect class="box box-d" x="190" y="744" width="600" height="154" />
+  <text class="head" x="230" y="786">4. 热点检测与时间序列分析</text>
+  <text class="text" x="230" y="814">先回答哪里最热、什么时候最热、哪类指标最异常</text>
+  <text class="text" x="230" y="836">方法：总量排序、窗口时间序列、热点窗口检测</text>
+  <text class="note" x="230" y="858">算法：Z-score、IQR、Top-percentile、Top-N ranking</text>
+  <text class="text" x="230" y="880">输出：热点窗口、热点实体、时序波动摘要</text>
+
+  <path class="arrow" d="M490 898 L490 958" />
+
+  <rect class="box box-e" x="190" y="958" width="600" height="150" />
+  <text class="head" x="230" y="1000">5. 函数级符号化归因</text>
+  <text class="text" x="230" y="1028">对热点事件进一步定位到函数或代码位置</text>
+  <text class="text" x="230" y="1050">方法：地址解析、进程内存映射匹配、符号化、按函数聚合统计</text>
+  <text class="note" x="230" y="1072">算法：addr2line、maps lookup、symbolization、group-by aggregation</text>
+  <text class="text" x="230" y="1094">核心算法：事件地址到语义函数实体的映射与聚合</text>
+
+  <path class="arrow" d="M490 1108 L490 1168" />
+
+  <rect class="box box-d" x="190" y="1168" width="600" height="142" />
+  <text class="head" x="230" y="1210">6. 可解释报告生成</text>
+  <text class="text" x="230" y="1238">把窗口热点、实体归因和函数热点转成可读结果</text>
+  <text class="text" x="230" y="1260">方法：条形图、时间序列图、相关性热力图、摘要报告</text>
+  <text class="note" x="230" y="1282">算法：Pearson 相关性、Top-N 排序、时间序列可视化</text>
+  <text class="text" x="230" y="1304">输出：单程序诊断视图与跨 run 复盘材料</text>
+
+  <text class="note" x="168" y="1332">核心算法主线：perf_event / kprobe - counter delta - Z-score/IQR hotspot detection - addr2line symbolization - Pearson heatmap</text>
+</svg>

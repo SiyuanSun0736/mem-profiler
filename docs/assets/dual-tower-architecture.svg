@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="1540" viewBox="0 0 1040 1540" role="img" aria-labelledby="title desc">
+  <title id="title">双塔输出到单程序评分的纵向流程图</title>
+  <desc id="desc">聚焦 PairTransformer 推理后的评分层：从 query-anchor 比较、tie-aware 解码到最终单程序分数与诊断输出。</desc>
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .frame { fill: #ffffff; stroke: #d5dee7; stroke-width: 2; }
+      .title { font: 700 30px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #10293d; }
+      .subtitle { font: 400 16px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #40586a; }
+      .guide { stroke: #b3c3cf; stroke-width: 1.5; stroke-dasharray: 8 8; }
+      .box { stroke-width: 2.5; rx: 22; ry: 22; }
+      .box-a { fill: #e7f3fb; stroke: #2778a8; }
+      .box-b { fill: #eef8f0; stroke: #4d9964; }
+      .box-c { fill: #efeafb; stroke: #6d63a7; }
+      .box-d { fill: #fff4df; stroke: #c88b2f; }
+      .box-e { fill: #edf7f3; stroke: #338c77; }
+      .box-f { fill: #fff0f2; stroke: #c65c6e; }
+      .head { font: 700 21px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #13334b; }
+      .text { font: 400 15px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #324b5d; }
+      .note { font: 400 13px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #547083; }
+      .formula { font: 600 15px 'DejaVu Sans', sans-serif; fill: #183b55; }
+      .arrow { stroke: #29465a; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#29465a" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1040" height="1540" rx="24" ry="24" />
+  <rect class="frame" x="36" y="34" width="968" height="1472" rx="26" ry="26" />
+
+  <text class="title" x="64" y="82">双塔输出如何回收到单程序评分</text>
+  <text class="subtitle" x="64" y="110">聚焦 PairTransformer 推理后半段：从 query-anchor 比较到 tie-aware 解码与评分输出</text>
+
+  <line class="guide" x1="520" y1="146" x2="520" y2="1408" />
+
+  <rect class="box box-a" x="160" y="160" width="720" height="128" />
+  <text class="head" x="198" y="202">1. 评分层先读取 query 与 anchor</text>
+  <text class="text" x="198" y="230">query 读自 run_features_zscore.parquet；anchor 读自 anchor_set.parquet。</text>
+  <text class="text" x="198" y="254">默认锚点通常是 O0 / O2 / O3，并带有 score_gt、anchor_quality 和锚点特征。</text>
+  <text class="note" x="198" y="278">这一步已经进入评分层，不再展开上游的 pair 构造与训练数据生成。</text>
+
+  <path class="arrow" d="M520 288 L520 336" />
+
+  <rect class="box box-b" x="160" y="336" width="720" height="146" />
+  <text class="head" x="198" y="378">2. 双塔 / PairTransformer 逐对比较</text>
+  <text class="text" x="198" y="406">评分时会把 query 与每个 anchor 逐一配对，调用共享编码器做一次前向推理。</text>
+  <text class="text" x="198" y="430">回归头给出 raw log-ratio；辅助头给出三分类概率，供 gating 与投票权重使用。</text>
+  <text class="formula" x="198" y="458">r_hat(q, a_k) 和 class_probs(q, a_k)</text>
+
+  <path class="arrow" d="M520 482 L520 530" />
+
+  <rect class="box box-c" x="160" y="530" width="720" height="180" />
+  <text class="head" x="198" y="572">3. Tie-aware 解码压制近 tie pair</text>
+  <text class="text" x="198" y="600">若存在 per-pair calibration，可先对 raw log-ratio 做线性校准。</text>
+  <text class="text" x="198" y="624">再按 (1 - p_tie)^power 缩放；若判为 tie 且 p_tie 超过 gate，输出直接置 0。</text>
+  <text class="text" x="198" y="648">非 tie pair 还会把输出符号强制对齐到辅助分类方向。</text>
+  <text class="note" x="198" y="676">目的不是让分类头替代回归头，而是降低 near-tie 小噪声对评分层的放大效应。</text>
+
+  <path class="arrow" d="M520 710 L520 758" />
+
+  <rect class="box box-d" x="160" y="758" width="720" height="176" />
+  <text class="head" x="198" y="800">4. 用锚点真值回收单程序分数</text>
+  <text class="text" x="198" y="828">每个锚点都会给出一个局部估计：把 anchor 的 score_gt 与 gated log-ratio 直接相加。</text>
+  <text class="formula" x="198" y="858">score_estimate_k = anchor score_gt + gated log-ratio</text>
+  <text class="text" x="198" y="888">这样得到的是“锚点真值 + pairwise 偏移量”的分数转移，而不是新的单样本监督器。</text>
+  <text class="note" x="198" y="914">这也是 pairwise 模型能够服务单程序评分的关键转换层。</text>
+
+  <path class="arrow" d="M520 934 L520 982" />
+
+  <rect class="box box-e" x="160" y="982" width="720" height="198" />
+  <text class="head" x="198" y="1024">5. 评分层鲁棒聚合</text>
+  <text class="text" x="198" y="1052">权重来源包括 anchor_quality、variant distance 和 effective confidence。</text>
+  <text class="text" x="198" y="1076">低于 min_anchor_quality 的锚点直接排除；若显式启用 uncertainty weighting，还会再乘一层方差惩罚。</text>
+  <text class="text" x="198" y="1100">随后做 MAD + min_delta 过滤，再对保留锚点做 weighted average。</text>
+  <text class="note" x="198" y="1128">评分参数优先级：CLI &gt; 当前 variant tuned &gt; ALL tuned &gt; builtin。</text>
+  <text class="note" x="198" y="1152">这一层可以单独 fine tune，而不必重新训练主模型。</text>
+
+  <path class="arrow" d="M520 1180 L520 1228" />
+
+  <rect class="box box-f" x="160" y="1228" width="720" height="190" />
+  <text class="head" x="198" y="1270">6. 输出单程序分数、档位和诊断</text>
+  <text class="text" x="198" y="1298">最终得到 score_log，再映射为 score_100，并分到 poor / medium / good / strong。</text>
+  <text class="text" x="198" y="1322">score_100 依据锚点 score_gt 分布映射；瓶颈摘要覆盖 cache_bound、tlb_bound 等一级类别。</text>
+  <text class="text" x="198" y="1346">若显式传 --program --variant，还会打印热点窗口和锚点比较明细。</text>
+  <text class="note" x="198" y="1372">落盘：scores.parquet 与 score_eval.json。</text>
+
+  <text class="note" x="160" y="1458">图的焦点已经收窄到单程序评分层；训练侧共享编码、损失设计和数据构造仍以下方正文说明为准。</text>
+</svg>

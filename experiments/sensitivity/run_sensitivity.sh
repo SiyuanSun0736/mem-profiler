@@ -69,6 +69,14 @@ run_one "probe_llc_only"   --window 1.0 --no-dtlb  --no-fault
 run_one "probe_fault_only" --window 1.0 --no-llc   --no-dtlb
 run_one "probe_all"        --window 1.0
 
+python3 "$ROOT_DIR/scripts/build_methodology_tables.py" \
+    --sensitivity-dir "$RESULTS_BASE" \
+    --output "$RESULTS_BASE"
+
 echo ""
 echo "=== 敏感性测试完成 ==="
-echo "请对比 $RESULTS_BASE/ 下各子目录的 window_metrics.jsonl，分析参数影响。"
+echo "自动生成的阈值化摘要："
+echo "  $RESULTS_BASE/sensitivity_samplerate_summary.md"
+echo "  $RESULTS_BASE/sensitivity_window_summary.md"
+echo "  $RESULTS_BASE/sensitivity_probe_summary.md"
+echo "  $RESULTS_BASE/methodology_recommendations.md"

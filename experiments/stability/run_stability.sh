@@ -69,40 +69,11 @@ for i in $(seq 1 $REPEAT); do
     sleep 1   # 避免连续运行互相干扰
 done
 
-# ---- 跨 run 统计（简单 Python one-liner）----
+python3 "$ROOT_DIR/scripts/build_methodology_tables.py" \
+    --stability-dir "$RESULTS_BASE" \
+    --output "$RESULTS_BASE"
+
 echo ""
-echo "=== 统计各指标跨 run 均值和 CV ==="
-python3 - <<'PYEOF'
-import json, pathlib, statistics, sys, os
-
-base = pathlib.Path(os.environ.get("RESULTS_BASE", "."))
-metrics = ["llc_load_misses", "llc_store_misses", "dtlb_misses", "minor_faults", "major_faults"]
-
-run_dirs = sorted(base.glob("run_*/"))
-if not run_dirs:
-    print("无 run 目录，跳过统计")
-    sys.exit(0)
-
-per_metric: dict[str, list[float]] = {m: [] for m in metrics}
-
-for rdir in run_dirs:
-    f = rdir / "window_metrics.jsonl"
-    if not f.exists():
-        continue
-    rows = [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
-    for m in metrics:
-        total = sum(r.get(m, 0) for r in rows)
-        per_metric[m].append(total)
-
-print(f"{'指标':<22} {'均值':>12} {'标准差':>12} {'CV%':>8}")
-print("-" * 58)
-for m, vals in per_metric.items():
-    if not vals:
-        continue
-    mean = statistics.mean(vals)
-    std  = statistics.stdev(vals) if len(vals) > 1 else 0.0
-    cv   = (std / mean * 100) if mean > 0 else 0.0
-    flag = " ⚠" if cv > 15 else ""
-    print(f"{m:<22} {mean:>12.1f} {std:>12.1f} {cv:>7.1f}%{flag}")
-PYEOF
-export RESULTS_BASE="$RESULTS_BASE"
+echo "自动生成的阈值化摘要："
+echo "  $RESULTS_BASE/stability_summary.md"
+echo "  $RESULTS_BASE/methodology_recommendations.md"

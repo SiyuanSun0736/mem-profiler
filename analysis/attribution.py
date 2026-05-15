@@ -27,7 +27,7 @@ from collections import defaultdict
 import pandas as pd
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "src"))
-from symbolize import symbolize_addresses, read_maps
+from symbolize import symbolize_addresses, read_maps, read_maps_file
 
 
 METRICS = [
@@ -72,6 +72,7 @@ def attribute_to_functions(
     pid: int,
     metric: str,
     top_n: int,
+    maps_file: str = "",
 ) -> pd.DataFrame:
     """
     对目标 PID 的 events 按 IP 地址符号化，聚合到函数级，返回 top_n 热点。
@@ -93,7 +94,7 @@ def attribute_to_functions(
         return pd.DataFrame()
 
     # 读取进程内存布局并批量符号化
-    maps = read_maps(pid)
+    maps = read_maps_file(maps_file) if maps_file else read_maps(pid)
     syms = symbolize_addresses(pid, unique_ips, maps=maps)
     ip_to_sym = dict(zip(unique_ips, syms))
 
@@ -124,6 +125,8 @@ def main() -> None:
     p.add_argument("--pid",     type=int, required=True, help="目标 PID")
     p.add_argument("--binary",  type=str, default="",
                    help="目标二进制路径（含调试信息时符号化更准确，可省略）")
+    p.add_argument("--maps-file", type=str, default="",
+                   help="可选的 /proc/<pid>/maps 快照文件；用于目标进程已退出时离线归因")
     p.add_argument("--output",  required=True, help="输出目录")
     p.add_argument("--metric",  default="llc_load_misses", choices=METRICS)
     p.add_argument("--top",     type=int, default=30)
@@ -134,7 +137,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     events = load_events(data_dir)
-    df = attribute_to_functions(events, args.pid, args.metric, args.top)
+    df = attribute_to_functions(events, args.pid, args.metric, args.top, maps_file=args.maps_file)
 
     if df.empty:
         print("[info] 无函数级归因结果，退出。")

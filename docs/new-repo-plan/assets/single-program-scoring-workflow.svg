@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="1540" viewBox="0 0 1040 1540" role="img" aria-labelledby="title desc">
+  <title id="title">单程序评分纵向流程图</title>
+  <desc id="desc">展示 score_program.py 如何读取 query 和 anchor，经过 PairTransformer、tie-aware 解码、锚点分数回收与加权聚合，得到单程序分数和诊断输出。</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7fafc; }
+      .frame { fill: #ffffff; stroke: #d7e1e9; stroke-width: 2; }
+      .title { font: 700 30px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #16384f; }
+      .subtitle { font: 400 16px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #4d6679; }
+      .guide { stroke: #b5c8d6; stroke-width: 1.5; stroke-dasharray: 8 8; }
+      .box { stroke-width: 2.5; rx: 22; ry: 22; }
+      .box-a { fill: #e7f4fb; stroke: #2d7ea5; }
+      .box-b { fill: #edf8ef; stroke: #4d9b68; }
+      .box-c { fill: #f0edfb; stroke: #6b61a8; }
+      .box-d { fill: #fff2dd; stroke: #cf8a2e; }
+      .box-e { fill: #eaf6f1; stroke: #2f8f7c; }
+      .box-f { fill: #fff0f1; stroke: #ca5b6c; }
+      .head { font: 700 21px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #17384f; }
+      .text { font: 400 15px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #314d60; }
+      .note { font: 400 13px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #557084; }
+      .formula { font: 600 15px 'DejaVu Sans', sans-serif; fill: #17384f; }
+      .arrow { stroke: #32546b; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#32546b" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1040" height="1540" rx="24" ry="24" />
+  <rect class="frame" x="36" y="34" width="968" height="1472" rx="26" ry="26" />
+
+  <text class="title" x="64" y="82">单程序评分如何从 pairwise 预测回收到单程序分数</text>
+  <text class="subtitle" x="64" y="110">score_program.py：query 特征 + anchor 真值 + PairTransformer + tie-aware 聚合 → score_log / score_100 / band / 诊断摘要</text>
+
+  <line class="guide" x1="520" y1="146" x2="520" y2="1408" />
+
+  <rect class="box box-a" x="160" y="160" width="720" height="124" />
+  <text class="head" x="198" y="202">1. 读取 query run</text>
+  <text class="text" x="198" y="230">从 run_features_zscore.parquet 读取 query 的 53 维 non-time 特征。</text>
+  <text class="text" x="198" y="254">这一步产出进入模型的 query 向量 x_q，并保留 program / variant。</text>
+  <text class="note" x="198" y="276">输入焦点：只看运行级摘要特征，不直接把 program 名或 variant rank 喂给模型。</text>
+
+  <path class="arrow" d="M520 284 L520 330" />
+
+  <rect class="box box-b" x="160" y="330" width="720" height="146" />
+  <text class="head" x="198" y="372">2. 读取同程序 anchor set</text>
+  <text class="text" x="198" y="400">从 anchor_set.parquet 读取同程序锚点及其 score_gt / anchor_quality。</text>
+  <text class="text" x="198" y="424">默认 O0 / O2 / O3；先排除同 variant，无外部锚点时退化为全部锚点。</text>
+  <text class="note" x="198" y="448">锚点角色：提供参考真值，而不是重新定义一套新的单程序监督标签。</text>
+
+  <path class="arrow" d="M520 476 L520 522" />
+
+  <rect class="box box-c" x="160" y="522" width="720" height="170" />
+  <text class="head" x="198" y="564">3. PairTransformer 逐对比较</text>
+  <text class="text" x="198" y="592">对每个 query-anchor pair 执行一次前向推理。</text>
+  <text class="text" x="198" y="616">回归头输出 raw log-ratio；辅助分类头输出 i_better / tie / j_better 概率。</text>
+  <text class="formula" x="198" y="646">r_hat(q, a_k) 和 class_probs(q, a_k)</text>
+  <text class="note" x="198" y="672">这一步仍是 pairwise 比较，不是直接回归单程序绝对分数。</text>
+
+  <path class="arrow" d="M520 692 L520 740" />
+
+  <rect class="box box-d" x="160" y="740" width="720" height="196" />
+  <text class="head" x="198" y="782">4. Tie-aware 解码与单锚点 score transfer</text>
+  <text class="text" x="198" y="810">可选先做 per-pair calibration，再按 (1 - p_tie)^power 缩放回归输出。</text>
+  <text class="text" x="198" y="834">若解码为 tie 且 p_tie 大于 gate，输出直接置 0；非 tie pair 强制符号与分类方向一致。</text>
+  <text class="formula" x="198" y="864">score_estimate_k = anchor score_gt + gated log-ratio</text>
+  <text class="text" x="198" y="892">每个锚点都会给出一个局部单程序分数估计。</text>
+  <text class="note" x="198" y="918">核心含义：单程序评分是“锚点真值 + pairwise 偏移量”的回收过程。</text>
+
+  <path class="arrow" d="M520 936 L520 984" />
+
+  <rect class="box box-e" x="160" y="984" width="720" height="194" />
+  <text class="head" x="198" y="1026">5. 加权聚合与离群过滤</text>
+  <text class="text" x="198" y="1054">weight = anchor_quality × variant distance × effective confidence。</text>
+  <text class="text" x="198" y="1078">低于 min_anchor_quality 的锚点直接不参与；非 tie pair 还会把 direction margin 混入权重。</text>
+  <text class="text" x="198" y="1102">若显式启用 uncertainty weighting，则继续用 MC dropout 方差压低高不确定性锚点。</text>
+  <text class="text" x="198" y="1126">随后做 MAD + min_delta 过滤，并对保留下来的锚点做 weighted average。</text>
+  <text class="note" x="198" y="1152">参数优先级：CLI &gt; 当前 variant tuned &gt; ALL tuned &gt; builtin。</text>
+
+  <path class="arrow" d="M520 1178 L520 1224" />
+
+  <rect class="box box-f" x="160" y="1224" width="720" height="194" />
+  <text class="head" x="198" y="1266">6. 输出分数、档位和诊断</text>
+  <text class="text" x="198" y="1294">最终得到 score_log，再映射为 score_100，并分到 poor / medium / good / strong 档位。</text>
+  <text class="text" x="198" y="1318">score_100 依据锚点 score_gt 分布映射；瓶颈摘要覆盖 cache_bound、tlb_bound 等一级类别。</text>
+  <text class="text" x="198" y="1342">若显式传 --program --variant，还会打印热点窗口和锚点明细诊断卡片。</text>
+  <text class="note" x="198" y="1368">落盘产物：scores.parquet 保存评分摘要；score_eval.json 保存预测分数与 score_gt 的汇总评估。</text>
+
+  <text class="note" x="160" y="1458">这张图只覆盖单程序评分层，不再展开 run_features、pair 构造和训练阶段的上游流程。</text>
+</svg>

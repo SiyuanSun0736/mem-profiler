@@ -24,7 +24,8 @@
 7. [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)：当前数据问题、最值得做的优化和优先级。
 8. [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md)：score-first 与 time-first 两套默认口径的并排对比表与默认建议。
 9. [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)：接入交叉熵辅助头后的下一批优化方法、优先级和验收标准。
-10. [current-data-quality-audit.md](current-data-quality-audit.md)：当前数据快照、完整问题样本清单和 O2/O3 难例分流建议。
+10. [10-single-program-scoring-workflow.md](10-single-program-scoring-workflow.md)：只展开 `score_program.py` 这一层，说明单程序分数、档位和诊断是如何从锚点和 pairwise 预测回收出来的。
+11. [current-data-quality-audit.md](current-data-quality-audit.md)：当前数据快照、完整问题样本清单和 O2/O3 难例分流建议。
 
 ## 推荐阅读顺序
 
@@ -37,6 +38,8 @@
 如果你的目标是先判断这批数据最主要的问题在哪、下一步优先改什么，先读 [current-data-quality-audit.md](current-data-quality-audit.md)，再读 [07-data-quality-issues-and-priorities.md](07-data-quality-issues-and-priorities.md)。
 
 如果你的目标是确定 `score_program.py` 默认该走 score-first 还是 time-first，先读 [08-score-selection-objective-comparison.md](08-score-selection-objective-comparison.md)。
+
+如果你的目标是只看单程序评分怎么工作，直接读 [10-single-program-scoring-workflow.md](10-single-program-scoring-workflow.md)。
 
 如果你的目标是继续提升单程序准确度，先读 [09-optimization-ideas-after-ce.md](09-optimization-ideas-after-ce.md)。
 

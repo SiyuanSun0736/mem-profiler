@@ -38,6 +38,8 @@ echo "负载工具: $LOAD_NAME   重复次数: $REPEAT   单次时长: ${DURATIO
 echo "结果目录: $RESULTS_DIR"
 echo ""
 
+echo "group,run,elapsed_ms" > "$RESULTS_DIR/timing.csv"
+
 # ---- 基准组（无 eBPF）----
 echo "[1/3] 运行基准组（无 eBPF 采集器）..."
 for i in $(seq 1 $REPEAT); do
@@ -73,14 +75,35 @@ for i in $(seq 1 $REPEAT); do
 done
 
 # ---- perf stat 对比（单次）----
-echo "[3/3] perf stat 对比..."
+echo "[3/3] perf stat 对比（baseline vs eBPF）..."
 if command -v perf &>/dev/null; then
-    echo "--- baseline ---" > "$RESULTS_DIR/perf_stat.txt"
-    perf stat -e cycles,instructions,cache-misses \
-        -- bash -c "$LOAD_CMD 2>/dev/null" 2>> "$RESULTS_DIR/perf_stat.txt" || true
+    perf stat -x, -o "$RESULTS_DIR/perf_stat_baseline.csv" \
+        -e cycles,instructions,cache-misses \
+        -- sh -c "$LOAD_CMD >/dev/null 2>&1" || true
+
+    $LOAD_CMD 2>/dev/null &
+    LOAD_PID=$!
+    python3 "$ROOT_DIR/src/loader.py" \
+        --pid "$LOAD_PID" \
+        --window "$WINDOW" \
+        --duration "$DURATION" \
+        --output "$RESULTS_DIR/perf_run/" \
+        >/dev/null 2>&1 &
+    COLLECTOR_PID=$!
+
+    perf stat -x, -o "$RESULTS_DIR/perf_stat_ebpf.csv" \
+        -e cycles,instructions,cache-misses \
+        -p "$LOAD_PID" -- sleep "$DURATION" || true
+
+    wait "$COLLECTOR_PID" 2>/dev/null || true
+    wait "$LOAD_PID" 2>/dev/null || true
 else
     echo "perf 不可用，跳过 perf stat"
 fi
+
+python3 "$ROOT_DIR/scripts/build_methodology_tables.py" \
+    --overhead-dir "$RESULTS_DIR" \
+    --output "$RESULTS_DIR"
 
 # ---- 汇总 ----
 echo ""
@@ -89,5 +112,6 @@ echo "timing.csv 内容："
 echo "组别,次数,时间(ms)"
 cat "$RESULTS_DIR/timing.csv"
 echo ""
-echo "请运行以下命令生成分析图表："
-echo "  python3 $ROOT_DIR/analysis/report.py --results $RESULTS_DIR --output $RESULTS_DIR/figures/"
+echo "自动生成的阈值化摘要："
+echo "  $RESULTS_DIR/overhead_summary.md"
+echo "  $RESULTS_DIR/methodology_recommendations.md"

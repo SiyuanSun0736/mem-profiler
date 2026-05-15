@@ -323,6 +323,16 @@ sudo bash experiments/sensitivity/run_sensitivity.sh --pid <PID>
 sudo bash experiments/micro_benchmark/run_micro_bench.sh
 ```
 
+上述三类 P3 脚本现在都会在结果目录里自动生成带阈值判定的 Markdown/CSV 表，包括：
+
+1. `overhead_summary.*`
+2. `stability_summary.*`
+3. `sensitivity_*_summary.*`
+4. `methodology_recommendations.*`
+5. `methodology_validation.md`
+
+固定阈值、推荐默认配置和论文引用口径见 [docs/methodology-validation.md](docs/methodology-validation.md)。
+
 ---
 
 ## 阶段进度

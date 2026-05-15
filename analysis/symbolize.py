@@ -37,28 +37,42 @@ class SymbolInfo:
     offset:      int   # 在 DSO 文件内的偏移
 
 
+def parse_maps_text(text: str) -> list[MapEntry]:
+    """解析 /proc/<pid>/maps 风格文本，返回所有映射条目。"""
+    entries: list[MapEntry] = []
+    for line in text.splitlines():
+        m = re.match(
+            r"([0-9a-f]+)-([0-9a-f]+)\s+(\S+)\s+([0-9a-f]+)\s+\S+\s+\d+\s*(.*)",
+            line,
+        )
+        if not m:
+            continue
+        entries.append(MapEntry(
+            start=int(m.group(1), 16),
+            end=int(m.group(2), 16),
+            perms=m.group(3),
+            offset=int(m.group(4), 16),
+            path=m.group(5).strip(),
+        ))
+    return entries
+
+
 def read_maps(pid: int) -> list[MapEntry]:
     """读取 /proc/<pid>/maps，返回所有映射条目。"""
-    entries: list[MapEntry] = []
     maps_path = pathlib.Path(f"/proc/{pid}/maps")
     try:
-        for line in maps_path.read_text().splitlines():
-            m = re.match(
-                r"([0-9a-f]+)-([0-9a-f]+)\s+(\S+)\s+([0-9a-f]+)\s+\S+\s+\d+\s*(.*)",
-                line,
-            )
-            if not m:
-                continue
-            entries.append(MapEntry(
-                start=int(m.group(1), 16),
-                end=int(m.group(2), 16),
-                perms=m.group(3),
-                offset=int(m.group(4), 16),
-                path=m.group(5).strip(),
-            ))
+        return parse_maps_text(maps_path.read_text())
     except (PermissionError, FileNotFoundError):
-        pass
-    return entries
+        return []
+
+
+def read_maps_file(path: str | pathlib.Path) -> list[MapEntry]:
+    """读取保存下来的 maps 快照文件。"""
+    maps_path = pathlib.Path(path)
+    try:
+        return parse_maps_text(maps_path.read_text())
+    except FileNotFoundError:
+        return []
 
 
 def find_map_entry(addr: int, maps: list[MapEntry]) -> MapEntry | None:
