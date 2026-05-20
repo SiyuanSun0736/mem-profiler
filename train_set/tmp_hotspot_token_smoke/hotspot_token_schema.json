@@ -1,0 +1,26 @@
+{
+  "top_k": 6,
+  "tokens_per_program": 7,
+  "summary_token": {
+    "token": "summary",
+    "description": "Global run-level summary token built from the existing z-score run features."
+  },
+  "hotspot_tokens": {
+    "token_prefix": "hotspot_window",
+    "count": 6,
+    "selection": "top-k windows ranked by memory-pressure hotspot score within each run",
+    "window_feature_names": [
+      "rel_pos",
+      "instructions_share",
+      "ipc",
+      "llc_mpki_log1p",
+      "dtlb_mpki_log1p",
+      "itlb_mpki_log1p",
+      "fault_per_ki_log1p",
+      "mm_syscall_per_ki_log1p",
+      "samples_per_ms_log1p",
+      "hotspot_score"
+    ],
+    "score_formula": "score = sqrt(instructions_share) * (pos_z(llc_mpki) + pos_z(dtlb_mpki) + 0.5*pos_z(itlb_mpki) + pos_z(fault_per_ki) + 0.5*pos_z(mm_syscall_per_ki) + 0.75*pos_z(low_ipc))"
+  }
+}

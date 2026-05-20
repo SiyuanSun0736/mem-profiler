@@ -1,0 +1,283 @@
+{
+  "model": "FixedWorkBucketTokenPairTransformer",
+  "config": "fixed_work_bucket_token_base",
+  "seed": 42,
+  "pairs_path": "train_set/pairs.parquet",
+  "run_features_path": "train_set/run_features.parquet",
+  "output_dir": "train_set/tmp_fixed_work_token_smoke",
+  "architecture": "[summary+6 fixed_work_bucket tokens]x2->TransformerEncoder(3L,4H,ffn=256)->[summary_i;summary_j;summary_i-summary_j]->reg_head+cls_head",
+  "source_isolation": {
+    "baseline_script": "scripts/train_transformer.py",
+    "experimental_script": "scripts/experimental/fixed_work_token/train_fixed_work_token_transformer.py",
+    "schema_script": "scripts/experimental/fixed_work_token/fixed_work_token_schema.py",
+    "overwrites_baseline_outputs": false
+  },
+  "token_schema": {
+    "num_buckets": 6,
+    "tokens_per_program": 7,
+    "summary_token": {
+      "token": "summary",
+      "description": "Global run-level summary token built from the existing z-score run features."
+    },
+    "work_bucket_tokens": {
+      "token_prefix": "work_bucket",
+      "count": 6,
+      "selection": "equal-work buckets built from cumulative instructions share within each run",
+      "bucket_feature_names": [
+        "bucket_midpoint",
+        "instructions_share",
+        "duration_share",
+        "ipc",
+        "llc_mpki_log1p",
+        "dtlb_mpki_log1p",
+        "itlb_mpki_log1p",
+        "fault_per_ki_log1p",
+        "mm_syscall_per_ki_log1p",
+        "samples_per_ms_log1p"
+      ],
+      "progress_proxy": "cumulative instructions_share"
+    }
+  },
+  "token_cache_summary": {
+    "n_runs": 506,
+    "num_buckets": 6,
+    "bucket_feature_names": [
+      "bucket_midpoint",
+      "instructions_share",
+      "duration_share",
+      "ipc",
+      "llc_mpki_log1p",
+      "dtlb_mpki_log1p",
+      "itlb_mpki_log1p",
+      "fault_per_ki_log1p",
+      "mm_syscall_per_ki_log1p",
+      "samples_per_ms_log1p"
+    ],
+    "token_shape": [
+      6,
+      10
+    ],
+    "window_count": {
+      "min": 57,
+      "median": 60.0,
+      "max": 60
+    },
+    "active_window_count": {
+      "min": 5,
+      "median": 59.0,
+      "max": 60
+    },
+    "mean_assigned_instruction_share": {
+      "mean": 0.1666666716337204,
+      "std": 0.0
+    }
+  },
+  "token_scaler": {
+    "feature_names": [
+      "bucket_midpoint",
+      "instructions_share",
+      "duration_share",
+      "ipc",
+      "llc_mpki_log1p",
+      "dtlb_mpki_log1p",
+      "itlb_mpki_log1p",
+      "fault_per_ki_log1p",
+      "mm_syscall_per_ki_log1p",
+      "samples_per_ms_log1p"
+    ],
+    "n_tokens": 2100,
+    "mean": [
+      0.5,
+      0.16666541993618011,
+      0.15397077798843384,
+      1.8603732585906982,
+      0.11229514330625534,
+      0.07926907390356064,
+      0.0028465441428124905,
+      0.27728691697120667,
+      0.06328283250331879,
+      1.2833291292190552
+    ],
+    "std": [
+      0.2846378982067108,
+      1.2516975402832031e-06,
+      0.13462159037590027,
+      0.7601604461669922,
+      0.3178836405277252,
+      0.26374247670173645,
+      0.008444462902843952,
+      0.7632945775985718,
+      0.2229553461074829,
+      1.3177893161773682
+    ]
+  },
+  "n_params": 179908,
+  "device": "cpu",
+  "log_ratio_clip": 6.0,
+  "training_objective": {
+    "regression_loss": "weighted_huber",
+    "classification_loss": "weighted_cross_entropy",
+    "direction_loss": "disabled",
+    "loss_formula": "L = L_reg + aux_class_lambda * L_CE + direction_lambda * L_dir",
+    "aux_class_enabled": true,
+    "aux_class_lambda": 0.05,
+    "class_balance_power": 0.5,
+    "class_weights": {
+      "i_better": 0.787632,
+      "tie": 1.424735,
+      "j_better": 0.787632
+    },
+    "final_train_loss": 0.880911,
+    "final_val_loss": 0.652112,
+    "final_val_reg_loss": 0.571073,
+    "final_val_aux_class_loss": 1.62077
+  },
+  "tie_strategy": {
+    "tie_threshold": 0.05,
+    "near_tie_threshold": 0.25,
+    "tie_reg_weight": 0.35,
+    "near_tie_reg_weight": 0.65,
+    "aux_class_lambda": 0.05,
+    "class_balance_power": 0.5,
+    "direction_lambda": 0.0
+  },
+  "splits": {
+    "train_programs": 90,
+    "val_programs": 19,
+    "test_programs": 20,
+    "train_pairs": 1026,
+    "val_pairs": 228,
+    "test_pairs": 240
+  },
+  "split_magnitude_bins": {
+    "train": {
+      "tie": 136,
+      "near_tie": 172,
+      "far": 718
+    },
+    "val": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 152
+    },
+    "test": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 164
+    }
+  },
+  "results": {
+    "train": {
+      "n": 1026,
+      "mae": 1.1549,
+      "rmse": 1.5492,
+      "r2": 0.2237,
+      "dir_acc": 0.7,
+      "acc_3cls": 0.6004,
+      "aux_acc_3cls": 0.4474,
+      "aux_tie_recall": 0.375
+    },
+    "val": {
+      "n": 228,
+      "mae": 1.2752,
+      "rmse": 1.9943,
+      "r2": 0.1297,
+      "dir_acc": 0.6406,
+      "acc_3cls": 0.557,
+      "aux_acc_3cls": 0.364,
+      "aux_tie_recall": 0.3611
+    },
+    "test": {
+      "n": 240,
+      "mae": 1.3778,
+      "rmse": 1.8412,
+      "r2": 0.1323,
+      "dir_acc": 0.6765,
+      "acc_3cls": 0.5542,
+      "aux_acc_3cls": 0.4042,
+      "aux_tie_recall": 0.3056
+    }
+  },
+  "per_pair": {
+    "O0-O1": {
+      "n": 20,
+      "mae": 1.8174,
+      "rmse": 2.1873,
+      "r2": -0.7536,
+      "dir_acc": 0.6,
+      "acc_3cls": 0.6,
+      "aux_acc_3cls": 0.35,
+      "aux_tie_recall": NaN
+    },
+    "O0-O2": {
+      "n": 20,
+      "mae": 2.0803,
+      "rmse": 2.5239,
+      "r2": -1.4581,
+      "dir_acc": 0.6,
+      "acc_3cls": 0.6,
+      "aux_acc_3cls": 0.35,
+      "aux_tie_recall": NaN
+    },
+    "O0-O3": {
+      "n": 20,
+      "mae": 2.0158,
+      "rmse": 2.4361,
+      "r2": -0.8894,
+      "dir_acc": 0.65,
+      "acc_3cls": 0.55,
+      "aux_acc_3cls": 0.6,
+      "aux_tie_recall": NaN
+    },
+    "O1-O2": {
+      "n": 20,
+      "mae": 0.847,
+      "rmse": 1.1299,
+      "r2": -1.3384,
+      "dir_acc": 0.5882,
+      "acc_3cls": 0.4,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": 0.3333
+    },
+    "O1-O3": {
+      "n": 20,
+      "mae": 0.8144,
+      "rmse": 1.0788,
+      "r2": -0.9419,
+      "dir_acc": 0.8125,
+      "acc_3cls": 0.55,
+      "aux_acc_3cls": 0.3,
+      "aux_tie_recall": 0.25
+    },
+    "O2-O3": {
+      "n": 20,
+      "mae": 0.6561,
+      "rmse": 0.8482,
+      "r2": -7.9616,
+      "dir_acc": 0.7778,
+      "acc_3cls": 0.4,
+      "aux_acc_3cls": 0.5,
+      "aux_tie_recall": 0.3636
+    }
+  },
+  "history": {
+    "train_loss": [
+      0.880911
+    ],
+    "val_loss": [
+      0.652112
+    ],
+    "train_reg_loss": [
+      0.792851
+    ],
+    "val_reg_loss": [
+      0.571073
+    ],
+    "train_aux_class_loss": [
+      1.761202
+    ],
+    "val_aux_class_loss": [
+      1.62077
+    ]
+  }
+}

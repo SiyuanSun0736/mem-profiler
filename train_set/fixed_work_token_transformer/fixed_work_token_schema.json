@@ -1,0 +1,26 @@
+{
+  "num_buckets": 6,
+  "tokens_per_program": 7,
+  "summary_token": {
+    "token": "summary",
+    "description": "Global run-level summary token built from the existing z-score run features."
+  },
+  "work_bucket_tokens": {
+    "token_prefix": "work_bucket",
+    "count": 6,
+    "selection": "equal-work buckets built from cumulative instructions share within each run",
+    "bucket_feature_names": [
+      "bucket_midpoint",
+      "instructions_share",
+      "duration_share",
+      "ipc",
+      "llc_mpki_log1p",
+      "dtlb_mpki_log1p",
+      "itlb_mpki_log1p",
+      "fault_per_ki_log1p",
+      "mm_syscall_per_ki_log1p",
+      "samples_per_ms_log1p"
+    ],
+    "progress_proxy": "cumulative instructions_share"
+  }
+}

@@ -1,0 +1,428 @@
+{
+  "generated_at": "2026-05-19 17:43:35 UTC",
+  "seed": 42,
+  "pairs_path": "train_set/pairs.parquet",
+  "baseline": {
+    "model_path": "train_set/model_transformer.pt",
+    "eval_path": "train_set/model_transformer_eval.json",
+    "results": {
+      "train": {
+        "n": 1026,
+        "mae": 0.1076,
+        "rmse": 0.1473,
+        "r2": 0.993,
+        "dir_acc": 0.9607,
+        "acc_3cls": 0.8655,
+        "aux_acc_3cls": 0.9201,
+        "aux_tie_recall": 0.9632
+      },
+      "val": {
+        "n": 228,
+        "mae": 0.6019,
+        "rmse": 1.2263,
+        "r2": 0.6709,
+        "dir_acc": 0.8021,
+        "acc_3cls": 0.7193,
+        "aux_acc_3cls": 0.7939,
+        "aux_tie_recall": 0.7222
+      },
+      "test": {
+        "n": 240,
+        "mae": 0.5678,
+        "rmse": 0.8685,
+        "r2": 0.8069,
+        "dir_acc": 0.902,
+        "acc_3cls": 0.7958,
+        "aux_acc_3cls": 0.8417,
+        "aux_tie_recall": 0.6667
+      }
+    },
+    "focused_slices": {
+      "tie": {
+        "n": 36,
+        "mae": 0.1641,
+        "rmse": 0.2288,
+        "r2": -87.1897,
+        "dir_acc": NaN,
+        "acc_3cls": 0.3889,
+        "aux_acc_3cls": 0.6667,
+        "aux_tie_recall": 0.6667
+      },
+      "near_tie": {
+        "n": 40,
+        "mae": 0.2455,
+        "rmse": 0.3202,
+        "r2": -5.276,
+        "dir_acc": 0.7,
+        "acc_3cls": 0.65,
+        "aux_acc_3cls": 0.575,
+        "aux_tie_recall": NaN
+      },
+      "O2-O3": {
+        "n": 40,
+        "mae": 0.2735,
+        "rmse": 0.3793,
+        "r2": -0.6405,
+        "dir_acc": 0.6667,
+        "acc_3cls": 0.475,
+        "aux_acc_3cls": 0.575,
+        "aux_tie_recall": 0.5455
+      }
+    }
+  },
+  "variants": [
+    {
+      "name": "summary_only",
+      "description": "Only keep the global summary token; no semantic category tokens.",
+      "test": {
+        "n": 240,
+        "mae": 1.5147,
+        "rmse": 1.9592,
+        "r2": 0.0176,
+        "dir_acc": 0.598,
+        "acc_3cls": 0.5042,
+        "aux_acc_3cls": 0.3458,
+        "aux_tie_recall": 0.2222
+      },
+      "delta_vs_baseline": {
+        "mae": 0.9469,
+        "rmse": 1.0907,
+        "r2": -0.7893,
+        "dir_acc": -0.304,
+        "acc_3cls": -0.2916,
+        "aux_acc_3cls": -0.4959,
+        "aux_tie_recall": -0.4445
+      },
+      "slices": {
+        "tie": {
+          "metrics": {
+            "n": 36,
+            "mae": 1.0816,
+            "rmse": 1.2177,
+            "r2": -2497.2504,
+            "dir_acc": NaN,
+            "acc_3cls": 0.0278,
+            "aux_acc_3cls": 0.2222,
+            "aux_tie_recall": 0.2222
+          },
+          "delta_vs_baseline": {
+            "mae": 0.9175,
+            "rmse": 0.9889,
+            "r2": -2410.0607,
+            "dir_acc": null,
+            "acc_3cls": -0.3611,
+            "aux_acc_3cls": -0.4445,
+            "aux_tie_recall": -0.4445
+          }
+        },
+        "near_tie": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.8095,
+            "rmse": 0.9561,
+            "r2": -54.9744,
+            "dir_acc": 0.525,
+            "acc_3cls": 0.525,
+            "aux_acc_3cls": 0.325,
+            "aux_tie_recall": NaN
+          },
+          "delta_vs_baseline": {
+            "mae": 0.564,
+            "rmse": 0.6359,
+            "r2": -49.6984,
+            "dir_acc": -0.175,
+            "acc_3cls": -0.125,
+            "aux_acc_3cls": -0.25,
+            "aux_tie_recall": null
+          }
+        },
+        "O2-O3": {
+          "metrics": {
+            "n": 40,
+            "mae": 1.0343,
+            "rmse": 1.2372,
+            "r2": -16.4518,
+            "dir_acc": 0.5,
+            "acc_3cls": 0.25,
+            "aux_acc_3cls": 0.325,
+            "aux_tie_recall": 0.2727
+          },
+          "delta_vs_baseline": {
+            "mae": 0.7608,
+            "rmse": 0.8579,
+            "r2": -15.8113,
+            "dir_acc": -0.1667,
+            "acc_3cls": -0.225,
+            "aux_acc_3cls": -0.25,
+            "aux_tie_recall": -0.2728
+          }
+        }
+      }
+    },
+    {
+      "name": "coarse_2way",
+      "description": "Two extra tokens: execution (core+phase) and memory (cache+tlb+fault+mm).",
+      "test": {
+        "n": 240,
+        "mae": 1.3061,
+        "rmse": 1.8137,
+        "r2": 0.1581,
+        "dir_acc": 0.6324,
+        "acc_3cls": 0.5375,
+        "aux_acc_3cls": 0.4542,
+        "aux_tie_recall": 0.0556
+      },
+      "delta_vs_baseline": {
+        "mae": 0.7383,
+        "rmse": 0.9452,
+        "r2": -0.6488,
+        "dir_acc": -0.2696,
+        "acc_3cls": -0.2583,
+        "aux_acc_3cls": -0.3875,
+        "aux_tie_recall": -0.6111
+      },
+      "slices": {
+        "tie": {
+          "metrics": {
+            "n": 36,
+            "mae": 0.4199,
+            "rmse": 0.5554,
+            "r2": -518.7276,
+            "dir_acc": NaN,
+            "acc_3cls": 0.1111,
+            "aux_acc_3cls": 0.0556,
+            "aux_tie_recall": 0.0556
+          },
+          "delta_vs_baseline": {
+            "mae": 0.2558,
+            "rmse": 0.3266,
+            "r2": -431.5379,
+            "dir_acc": null,
+            "acc_3cls": -0.2778,
+            "aux_acc_3cls": -0.6111,
+            "aux_tie_recall": -0.6111
+          }
+        },
+        "near_tie": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.5083,
+            "rmse": 0.628,
+            "r2": -23.1441,
+            "dir_acc": 0.55,
+            "acc_3cls": 0.55,
+            "aux_acc_3cls": 0.45,
+            "aux_tie_recall": NaN
+          },
+          "delta_vs_baseline": {
+            "mae": 0.2628,
+            "rmse": 0.3078,
+            "r2": -17.8681,
+            "dir_acc": -0.15,
+            "acc_3cls": -0.1,
+            "aux_acc_3cls": -0.125,
+            "aux_tie_recall": null
+          }
+        },
+        "O2-O3": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.5637,
+            "rmse": 0.7709,
+            "r2": -5.776,
+            "dir_acc": 0.5556,
+            "acc_3cls": 0.275,
+            "aux_acc_3cls": 0.275,
+            "aux_tie_recall": 0.0909
+          },
+          "delta_vs_baseline": {
+            "mae": 0.2902,
+            "rmse": 0.3916,
+            "r2": -5.1355,
+            "dir_acc": -0.1111,
+            "acc_3cls": -0.2,
+            "aux_acc_3cls": -0.3,
+            "aux_tie_recall": -0.4546
+          }
+        }
+      }
+    },
+    {
+      "name": "no_mm_phase_4way",
+      "description": "Keep core/cache/tlb/fault tokens and drop mm/phase tokens.",
+      "test": {
+        "n": 240,
+        "mae": 1.3224,
+        "rmse": 1.7984,
+        "r2": 0.1723,
+        "dir_acc": 0.6422,
+        "acc_3cls": 0.5458,
+        "aux_acc_3cls": 0.35,
+        "aux_tie_recall": 0.5278
+      },
+      "delta_vs_baseline": {
+        "mae": 0.7546,
+        "rmse": 0.9299,
+        "r2": -0.6346,
+        "dir_acc": -0.2598,
+        "acc_3cls": -0.25,
+        "aux_acc_3cls": -0.4917,
+        "aux_tie_recall": -0.1389
+      },
+      "slices": {
+        "tie": {
+          "metrics": {
+            "n": 36,
+            "mae": 0.715,
+            "rmse": 0.9061,
+            "r2": -1382.2254,
+            "dir_acc": NaN,
+            "acc_3cls": 0.0556,
+            "aux_acc_3cls": 0.5278,
+            "aux_tie_recall": 0.5278
+          },
+          "delta_vs_baseline": {
+            "mae": 0.5509,
+            "rmse": 0.6773,
+            "r2": -1295.0357,
+            "dir_acc": null,
+            "acc_3cls": -0.3333,
+            "aux_acc_3cls": -0.1389,
+            "aux_tie_recall": -0.1389
+          }
+        },
+        "near_tie": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.6727,
+            "rmse": 0.9676,
+            "r2": -56.3192,
+            "dir_acc": 0.575,
+            "acc_3cls": 0.575,
+            "aux_acc_3cls": 0.35,
+            "aux_tie_recall": NaN
+          },
+          "delta_vs_baseline": {
+            "mae": 0.4272,
+            "rmse": 0.6474,
+            "r2": -51.0432,
+            "dir_acc": -0.125,
+            "acc_3cls": -0.075,
+            "aux_acc_3cls": -0.225,
+            "aux_tie_recall": null
+          }
+        },
+        "O2-O3": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.7707,
+            "rmse": 1.0723,
+            "r2": -12.109,
+            "dir_acc": 0.4444,
+            "acc_3cls": 0.25,
+            "aux_acc_3cls": 0.35,
+            "aux_tie_recall": 0.4091
+          },
+          "delta_vs_baseline": {
+            "mae": 0.4972,
+            "rmse": 0.693,
+            "r2": -11.4685,
+            "dir_acc": -0.2223,
+            "acc_3cls": -0.225,
+            "aux_acc_3cls": -0.225,
+            "aux_tie_recall": -0.1364
+          }
+        }
+      }
+    },
+    {
+      "name": "semantic_full_reference",
+      "description": "Reference to the existing 6-way semantic category-token experiment.",
+      "test": {
+        "n": 240,
+        "mae": 0.5733,
+        "rmse": 0.9159,
+        "r2": 0.7853,
+        "dir_acc": 0.8578,
+        "acc_3cls": 0.7625,
+        "aux_acc_3cls": 0.8167,
+        "aux_tie_recall": 0.6667
+      },
+      "delta_vs_baseline": {
+        "mae": 0.0055,
+        "rmse": 0.0474,
+        "r2": -0.0216,
+        "dir_acc": -0.0442,
+        "acc_3cls": -0.0333,
+        "aux_acc_3cls": -0.025,
+        "aux_tie_recall": 0.0
+      },
+      "slices": {
+        "tie": {
+          "metrics": {
+            "n": 36,
+            "mae": 0.1383,
+            "rmse": 0.1955,
+            "r2": -63.388,
+            "dir_acc": NaN,
+            "acc_3cls": 0.3333,
+            "aux_acc_3cls": 0.6667,
+            "aux_tie_recall": 0.6667
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0258,
+            "rmse": -0.0333,
+            "r2": 23.8017,
+            "dir_acc": null,
+            "acc_3cls": -0.0556,
+            "aux_acc_3cls": 0.0,
+            "aux_tie_recall": 0.0
+          }
+        },
+        "near_tie": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.2301,
+            "rmse": 0.3078,
+            "r2": -4.8007,
+            "dir_acc": 0.625,
+            "acc_3cls": 0.575,
+            "aux_acc_3cls": 0.5,
+            "aux_tie_recall": NaN
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0154,
+            "rmse": -0.0124,
+            "r2": 0.4753,
+            "dir_acc": -0.075,
+            "acc_3cls": -0.075,
+            "aux_acc_3cls": -0.075,
+            "aux_tie_recall": null
+          }
+        },
+        "O2-O3": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.2605,
+            "rmse": 0.354,
+            "r2": -0.4289,
+            "dir_acc": 0.5,
+            "acc_3cls": 0.375,
+            "aux_acc_3cls": 0.55,
+            "aux_tie_recall": 0.5909
+          },
+          "delta_vs_baseline": {
+            "mae": -0.013,
+            "rmse": -0.0253,
+            "r2": 0.2116,
+            "dir_acc": -0.1667,
+            "acc_3cls": -0.1,
+            "aux_acc_3cls": -0.025,
+            "aux_tie_recall": 0.0454
+          }
+        }
+      }
+    }
+  ],
+  "diagnosis": "inconclusive_but_extra_tokens_not_helping"
+}

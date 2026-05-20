@@ -1,0 +1,237 @@
+{
+  "model": "CategoryTokenPairTransformer",
+  "variant": "summary_only",
+  "seed": 42,
+  "pairs_path": "train_set/pairs.parquet",
+  "output_dir": "train_set/tmp_category_token_ablation_smoke/summary_only",
+  "description": "Only keep the global summary token; no semantic category tokens.",
+  "architecture": "[summary+0 ablation tokens]x2->TransformerEncoder(3L,4H,ffn=256)->[summary_i;summary_j;summary_i-summary_j]->reg_head+cls_head",
+  "token_schema": {
+    "include_summary_token": true,
+    "n_total_features": 53,
+    "n_category_tokens": 0,
+    "n_tokens_per_program": 1,
+    "category_order": [],
+    "token_order": [
+      "summary"
+    ],
+    "tokens": [
+      {
+        "token": "summary",
+        "description": "Global run-level summary projection over all non-time features.",
+        "n_features": 53,
+        "features": [
+          "ipc",
+          "cpi",
+          "llc_load_miss_rate",
+          "llc_store_miss_rate",
+          "llc_mpki",
+          "llc_store_mpki",
+          "dtlb_miss_rate",
+          "dtlb_mpki",
+          "itlb_mpki",
+          "fault_per_ki",
+          "fault_per_ms",
+          "samples_per_ms",
+          "win_ipc_mean",
+          "win_ipc_std",
+          "win_ipc_p95",
+          "win_ipc_peak_share",
+          "win_ipc_min",
+          "win_llc_mpki_mean",
+          "win_llc_mpki_std",
+          "win_llc_mpki_p95",
+          "win_llc_mpki_peak_share",
+          "win_llc_mpki_min",
+          "win_dtlb_mpki_mean",
+          "win_dtlb_mpki_std",
+          "win_dtlb_mpki_p95",
+          "win_dtlb_mpki_peak_share",
+          "win_dtlb_mpki_min",
+          "win_itlb_mpki_mean",
+          "win_itlb_mpki_std",
+          "win_itlb_mpki_p95",
+          "win_itlb_mpki_peak_share",
+          "win_itlb_mpki_min",
+          "win_fault_mean",
+          "win_fault_std",
+          "win_fault_p95",
+          "win_fault_peak_share",
+          "win_fault_min",
+          "anon_fault_ratio",
+          "file_fault_ratio",
+          "write_fault_ratio",
+          "instruction_fault_ratio",
+          "mmap_per_ms",
+          "munmap_per_ms",
+          "brk_per_ms",
+          "mm_syscall_per_ms",
+          "mmap_bytes_per_ms",
+          "warmup_ipc",
+          "steady_ipc",
+          "phase_ipc_ratio",
+          "warmup_llc_mpki",
+          "steady_llc_mpki",
+          "phase_llc_ratio",
+          "phase_fault_ratio"
+        ]
+      }
+    ]
+  },
+  "n_params": 178692,
+  "device": "cpu",
+  "training_objective": {
+    "aux_class_lambda": 0.05,
+    "class_balance_power": 0.5,
+    "class_weights": {
+      "i_better": 0.787632,
+      "tie": 1.424735,
+      "j_better": 0.787632
+    }
+  },
+  "tie_strategy": {
+    "tie_threshold": 0.05,
+    "near_tie_threshold": 0.25,
+    "tie_reg_weight": 0.35,
+    "near_tie_reg_weight": 0.65
+  },
+  "splits": {
+    "train_programs": 90,
+    "val_programs": 19,
+    "test_programs": 20,
+    "train_pairs": 1026,
+    "val_pairs": 228,
+    "test_pairs": 240
+  },
+  "split_magnitude_bins": {
+    "train": {
+      "tie": 136,
+      "near_tie": 172,
+      "far": 718
+    },
+    "val": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 152
+    },
+    "test": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 164
+    }
+  },
+  "results": {
+    "train": {
+      "n": 1026,
+      "mae": 1.4324,
+      "rmse": 1.8482,
+      "r2": -0.1049,
+      "dir_acc": 0.5933,
+      "acc_3cls": 0.499,
+      "aux_acc_3cls": 0.3635,
+      "aux_tie_recall": 0.1985
+    },
+    "val": {
+      "n": 228,
+      "mae": 1.6407,
+      "rmse": 2.2283,
+      "r2": -0.0865,
+      "dir_acc": 0.5729,
+      "acc_3cls": 0.4825,
+      "aux_acc_3cls": 0.3333,
+      "aux_tie_recall": 0.25
+    },
+    "test": {
+      "n": 240,
+      "mae": 1.5147,
+      "rmse": 1.9592,
+      "r2": 0.0176,
+      "dir_acc": 0.598,
+      "acc_3cls": 0.5042,
+      "aux_acc_3cls": 0.3458,
+      "aux_tie_recall": 0.2222
+    }
+  },
+  "per_pair": {
+    "O0-O1": {
+      "n": 20,
+      "mae": 1.822,
+      "rmse": 2.2408,
+      "r2": -0.8404,
+      "dir_acc": 0.55,
+      "acc_3cls": 0.55,
+      "aux_acc_3cls": 0.55,
+      "aux_tie_recall": NaN
+    },
+    "O0-O2": {
+      "n": 20,
+      "mae": 2.4743,
+      "rmse": 2.9056,
+      "r2": -2.258,
+      "dir_acc": 0.4,
+      "acc_3cls": 0.4,
+      "aux_acc_3cls": 0.45,
+      "aux_tie_recall": NaN
+    },
+    "O0-O3": {
+      "n": 20,
+      "mae": 2.3897,
+      "rmse": 2.7512,
+      "r2": -1.4098,
+      "dir_acc": 0.5,
+      "acc_3cls": 0.5,
+      "aux_acc_3cls": 0.65,
+      "aux_tie_recall": NaN
+    },
+    "O1-O2": {
+      "n": 20,
+      "mae": 1.459,
+      "rmse": 1.7458,
+      "r2": -4.5829,
+      "dir_acc": 0.2353,
+      "acc_3cls": 0.2,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": 0.3333
+    },
+    "O1-O3": {
+      "n": 20,
+      "mae": 1.294,
+      "rmse": 1.5876,
+      "r2": -3.2057,
+      "dir_acc": 0.3125,
+      "acc_3cls": 0.25,
+      "aux_acc_3cls": 0.45,
+      "aux_tie_recall": 0.0
+    },
+    "O2-O3": {
+      "n": 20,
+      "mae": 0.8615,
+      "rmse": 1.0687,
+      "r2": -13.2249,
+      "dir_acc": 0.6667,
+      "acc_3cls": 0.35,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": 0.1818
+    }
+  },
+  "history": {
+    "train_loss": [
+      0.87646
+    ],
+    "val_loss": [
+      0.805688
+    ],
+    "train_reg_loss": [
+      0.783014
+    ],
+    "val_reg_loss": [
+      0.728712
+    ],
+    "train_aux_class_loss": [
+      1.868914
+    ],
+    "val_aux_class_loss": [
+      1.539525
+    ]
+  }
+}

@@ -1,0 +1,428 @@
+{
+  "generated_at": "2026-05-19 17:47:17 UTC",
+  "seed": 42,
+  "pairs_path": "train_set/pairs.parquet",
+  "baseline": {
+    "model_path": "train_set/model_transformer.pt",
+    "eval_path": "train_set/model_transformer_eval.json",
+    "results": {
+      "train": {
+        "n": 1026,
+        "mae": 0.1076,
+        "rmse": 0.1473,
+        "r2": 0.993,
+        "dir_acc": 0.9607,
+        "acc_3cls": 0.8655,
+        "aux_acc_3cls": 0.9201,
+        "aux_tie_recall": 0.9632
+      },
+      "val": {
+        "n": 228,
+        "mae": 0.6019,
+        "rmse": 1.2263,
+        "r2": 0.6709,
+        "dir_acc": 0.8021,
+        "acc_3cls": 0.7193,
+        "aux_acc_3cls": 0.7939,
+        "aux_tie_recall": 0.7222
+      },
+      "test": {
+        "n": 240,
+        "mae": 0.5678,
+        "rmse": 0.8685,
+        "r2": 0.8069,
+        "dir_acc": 0.902,
+        "acc_3cls": 0.7958,
+        "aux_acc_3cls": 0.8417,
+        "aux_tie_recall": 0.6667
+      }
+    },
+    "focused_slices": {
+      "tie": {
+        "n": 36,
+        "mae": 0.1641,
+        "rmse": 0.2288,
+        "r2": -87.1897,
+        "dir_acc": NaN,
+        "acc_3cls": 0.3889,
+        "aux_acc_3cls": 0.6667,
+        "aux_tie_recall": 0.6667
+      },
+      "near_tie": {
+        "n": 40,
+        "mae": 0.2455,
+        "rmse": 0.3202,
+        "r2": -5.276,
+        "dir_acc": 0.7,
+        "acc_3cls": 0.65,
+        "aux_acc_3cls": 0.575,
+        "aux_tie_recall": NaN
+      },
+      "O2-O3": {
+        "n": 40,
+        "mae": 0.2735,
+        "rmse": 0.3793,
+        "r2": -0.6405,
+        "dir_acc": 0.6667,
+        "acc_3cls": 0.475,
+        "aux_acc_3cls": 0.575,
+        "aux_tie_recall": 0.5455
+      }
+    }
+  },
+  "variants": [
+    {
+      "name": "summary_only",
+      "description": "Only keep the global summary token; no semantic category tokens.",
+      "test": {
+        "n": 240,
+        "mae": 0.6416,
+        "rmse": 1.0215,
+        "r2": 0.733,
+        "dir_acc": 0.8873,
+        "acc_3cls": 0.7833,
+        "aux_acc_3cls": 0.8167,
+        "aux_tie_recall": 0.5833
+      },
+      "delta_vs_baseline": {
+        "mae": 0.0738,
+        "rmse": 0.153,
+        "r2": -0.0739,
+        "dir_acc": -0.0147,
+        "acc_3cls": -0.0125,
+        "aux_acc_3cls": -0.025,
+        "aux_tie_recall": -0.0834
+      },
+      "slices": {
+        "tie": {
+          "metrics": {
+            "n": 36,
+            "mae": 0.1235,
+            "rmse": 0.1526,
+            "r2": -38.2368,
+            "dir_acc": NaN,
+            "acc_3cls": 0.2778,
+            "aux_acc_3cls": 0.5833,
+            "aux_tie_recall": 0.5833
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0406,
+            "rmse": -0.0762,
+            "r2": 48.9529,
+            "dir_acc": null,
+            "acc_3cls": -0.1111,
+            "aux_acc_3cls": -0.0834,
+            "aux_tie_recall": -0.0834
+          }
+        },
+        "near_tie": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.1826,
+            "rmse": 0.2433,
+            "r2": -2.6248,
+            "dir_acc": 0.775,
+            "acc_3cls": 0.775,
+            "aux_acc_3cls": 0.725,
+            "aux_tie_recall": NaN
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0629,
+            "rmse": -0.0769,
+            "r2": 2.6512,
+            "dir_acc": 0.075,
+            "acc_3cls": 0.125,
+            "aux_acc_3cls": 0.15,
+            "aux_tie_recall": null
+          }
+        },
+        "O2-O3": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.1931,
+            "rmse": 0.239,
+            "r2": 0.349,
+            "dir_acc": 0.7222,
+            "acc_3cls": 0.45,
+            "aux_acc_3cls": 0.6,
+            "aux_tie_recall": 0.5
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0804,
+            "rmse": -0.1403,
+            "r2": 0.9895,
+            "dir_acc": 0.0555,
+            "acc_3cls": -0.025,
+            "aux_acc_3cls": 0.025,
+            "aux_tie_recall": -0.0455
+          }
+        }
+      }
+    },
+    {
+      "name": "coarse_2way",
+      "description": "Two extra tokens: execution (core+phase) and memory (cache+tlb+fault+mm).",
+      "test": {
+        "n": 240,
+        "mae": 0.5572,
+        "rmse": 0.8674,
+        "r2": 0.8075,
+        "dir_acc": 0.8971,
+        "acc_3cls": 0.7833,
+        "aux_acc_3cls": 0.8125,
+        "aux_tie_recall": 0.7222
+      },
+      "delta_vs_baseline": {
+        "mae": -0.0106,
+        "rmse": -0.0011,
+        "r2": 0.0006,
+        "dir_acc": -0.0049,
+        "acc_3cls": -0.0125,
+        "aux_acc_3cls": -0.0292,
+        "aux_tie_recall": 0.0555
+      },
+      "slices": {
+        "tie": {
+          "metrics": {
+            "n": 36,
+            "mae": 0.1401,
+            "rmse": 0.1758,
+            "r2": -51.0832,
+            "dir_acc": NaN,
+            "acc_3cls": 0.1944,
+            "aux_acc_3cls": 0.7222,
+            "aux_tie_recall": 0.7222
+          },
+          "delta_vs_baseline": {
+            "mae": -0.024,
+            "rmse": -0.053,
+            "r2": 36.1065,
+            "dir_acc": null,
+            "acc_3cls": -0.1945,
+            "aux_acc_3cls": 0.0555,
+            "aux_tie_recall": 0.0555
+          }
+        },
+        "near_tie": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.2445,
+            "rmse": 0.3093,
+            "r2": -4.8593,
+            "dir_acc": 0.675,
+            "acc_3cls": 0.625,
+            "aux_acc_3cls": 0.4,
+            "aux_tie_recall": NaN
+          },
+          "delta_vs_baseline": {
+            "mae": -0.001,
+            "rmse": -0.0109,
+            "r2": 0.4167,
+            "dir_acc": -0.025,
+            "acc_3cls": -0.025,
+            "aux_acc_3cls": -0.175,
+            "aux_tie_recall": null
+          }
+        },
+        "O2-O3": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.2368,
+            "rmse": 0.3039,
+            "r2": -0.0529,
+            "dir_acc": 0.6667,
+            "acc_3cls": 0.425,
+            "aux_acc_3cls": 0.575,
+            "aux_tie_recall": 0.6364
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0367,
+            "rmse": -0.0754,
+            "r2": 0.5876,
+            "dir_acc": 0.0,
+            "acc_3cls": -0.05,
+            "aux_acc_3cls": 0.0,
+            "aux_tie_recall": 0.0909
+          }
+        }
+      }
+    },
+    {
+      "name": "no_mm_phase_4way",
+      "description": "Keep core/cache/tlb/fault tokens and drop mm/phase tokens.",
+      "test": {
+        "n": 240,
+        "mae": 0.6516,
+        "rmse": 1.0263,
+        "r2": 0.7304,
+        "dir_acc": 0.8725,
+        "acc_3cls": 0.7417,
+        "aux_acc_3cls": 0.8208,
+        "aux_tie_recall": 0.6111
+      },
+      "delta_vs_baseline": {
+        "mae": 0.0838,
+        "rmse": 0.1578,
+        "r2": -0.0765,
+        "dir_acc": -0.0295,
+        "acc_3cls": -0.0541,
+        "aux_acc_3cls": -0.0209,
+        "aux_tie_recall": -0.0556
+      },
+      "slices": {
+        "tie": {
+          "metrics": {
+            "n": 36,
+            "mae": 0.1721,
+            "rmse": 0.2156,
+            "r2": -77.2955,
+            "dir_acc": NaN,
+            "acc_3cls": 0.1667,
+            "aux_acc_3cls": 0.6111,
+            "aux_tie_recall": 0.6111
+          },
+          "delta_vs_baseline": {
+            "mae": 0.008,
+            "rmse": -0.0132,
+            "r2": 9.8942,
+            "dir_acc": null,
+            "acc_3cls": -0.2222,
+            "aux_acc_3cls": -0.0556,
+            "aux_tie_recall": -0.0556
+          }
+        },
+        "near_tie": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.2331,
+            "rmse": 0.3135,
+            "r2": -5.0163,
+            "dir_acc": 0.675,
+            "acc_3cls": 0.6,
+            "aux_acc_3cls": 0.625,
+            "aux_tie_recall": NaN
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0124,
+            "rmse": -0.0067,
+            "r2": 0.2597,
+            "dir_acc": -0.025,
+            "acc_3cls": -0.05,
+            "aux_acc_3cls": 0.05,
+            "aux_tie_recall": null
+          }
+        },
+        "O2-O3": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.3129,
+            "rmse": 0.4213,
+            "r2": -1.024,
+            "dir_acc": 0.5556,
+            "acc_3cls": 0.3,
+            "aux_acc_3cls": 0.625,
+            "aux_tie_recall": 0.6364
+          },
+          "delta_vs_baseline": {
+            "mae": 0.0394,
+            "rmse": 0.042,
+            "r2": -0.3835,
+            "dir_acc": -0.1111,
+            "acc_3cls": -0.175,
+            "aux_acc_3cls": 0.05,
+            "aux_tie_recall": 0.0909
+          }
+        }
+      }
+    },
+    {
+      "name": "semantic_full_reference",
+      "description": "Reference to the existing 6-way semantic category-token experiment.",
+      "test": {
+        "n": 240,
+        "mae": 0.5733,
+        "rmse": 0.9159,
+        "r2": 0.7853,
+        "dir_acc": 0.8578,
+        "acc_3cls": 0.7625,
+        "aux_acc_3cls": 0.8167,
+        "aux_tie_recall": 0.6667
+      },
+      "delta_vs_baseline": {
+        "mae": 0.0055,
+        "rmse": 0.0474,
+        "r2": -0.0216,
+        "dir_acc": -0.0442,
+        "acc_3cls": -0.0333,
+        "aux_acc_3cls": -0.025,
+        "aux_tie_recall": 0.0
+      },
+      "slices": {
+        "tie": {
+          "metrics": {
+            "n": 36,
+            "mae": 0.1383,
+            "rmse": 0.1955,
+            "r2": -63.388,
+            "dir_acc": NaN,
+            "acc_3cls": 0.3333,
+            "aux_acc_3cls": 0.6667,
+            "aux_tie_recall": 0.6667
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0258,
+            "rmse": -0.0333,
+            "r2": 23.8017,
+            "dir_acc": null,
+            "acc_3cls": -0.0556,
+            "aux_acc_3cls": 0.0,
+            "aux_tie_recall": 0.0
+          }
+        },
+        "near_tie": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.2301,
+            "rmse": 0.3078,
+            "r2": -4.8007,
+            "dir_acc": 0.625,
+            "acc_3cls": 0.575,
+            "aux_acc_3cls": 0.5,
+            "aux_tie_recall": NaN
+          },
+          "delta_vs_baseline": {
+            "mae": -0.0154,
+            "rmse": -0.0124,
+            "r2": 0.4753,
+            "dir_acc": -0.075,
+            "acc_3cls": -0.075,
+            "aux_acc_3cls": -0.075,
+            "aux_tie_recall": null
+          }
+        },
+        "O2-O3": {
+          "metrics": {
+            "n": 40,
+            "mae": 0.2605,
+            "rmse": 0.354,
+            "r2": -0.4289,
+            "dir_acc": 0.5,
+            "acc_3cls": 0.375,
+            "aux_acc_3cls": 0.55,
+            "aux_tie_recall": 0.5909
+          },
+          "delta_vs_baseline": {
+            "mae": -0.013,
+            "rmse": -0.0253,
+            "r2": 0.2116,
+            "dir_acc": -0.1667,
+            "acc_3cls": -0.1,
+            "aux_acc_3cls": -0.025,
+            "aux_tie_recall": 0.0454
+          }
+        }
+      }
+    }
+  ],
+  "diagnosis": "grouping_matters_but_multi_token_still_costly"
+}

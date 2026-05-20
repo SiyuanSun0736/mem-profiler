@@ -1,0 +1,319 @@
+{
+  "model": "CategoryTokenPairTransformer",
+  "variant": "no_mm_phase_4way",
+  "seed": 42,
+  "pairs_path": "train_set/pairs.parquet",
+  "output_dir": "train_set/tmp_category_token_ablation_smoke/no_mm_phase_4way",
+  "description": "Keep core/cache/tlb/fault tokens and drop mm/phase tokens.",
+  "architecture": "[summary+4 ablation tokens]x2->TransformerEncoder(3L,4H,ffn=256)->[summary_i;summary_j;summary_i-summary_j]->reg_head+cls_head",
+  "token_schema": {
+    "include_summary_token": true,
+    "n_total_features": 53,
+    "n_category_tokens": 4,
+    "n_tokens_per_program": 5,
+    "category_order": [
+      "core",
+      "cache",
+      "tlb",
+      "fault"
+    ],
+    "token_order": [
+      "summary",
+      "core",
+      "cache",
+      "tlb",
+      "fault"
+    ],
+    "tokens": [
+      {
+        "token": "summary",
+        "description": "Global run-level summary projection over all non-time features.",
+        "n_features": 53,
+        "features": [
+          "ipc",
+          "cpi",
+          "llc_load_miss_rate",
+          "llc_store_miss_rate",
+          "llc_mpki",
+          "llc_store_mpki",
+          "dtlb_miss_rate",
+          "dtlb_mpki",
+          "itlb_mpki",
+          "fault_per_ki",
+          "fault_per_ms",
+          "samples_per_ms",
+          "win_ipc_mean",
+          "win_ipc_std",
+          "win_ipc_p95",
+          "win_ipc_peak_share",
+          "win_ipc_min",
+          "win_llc_mpki_mean",
+          "win_llc_mpki_std",
+          "win_llc_mpki_p95",
+          "win_llc_mpki_peak_share",
+          "win_llc_mpki_min",
+          "win_dtlb_mpki_mean",
+          "win_dtlb_mpki_std",
+          "win_dtlb_mpki_p95",
+          "win_dtlb_mpki_peak_share",
+          "win_dtlb_mpki_min",
+          "win_itlb_mpki_mean",
+          "win_itlb_mpki_std",
+          "win_itlb_mpki_p95",
+          "win_itlb_mpki_peak_share",
+          "win_itlb_mpki_min",
+          "win_fault_mean",
+          "win_fault_std",
+          "win_fault_p95",
+          "win_fault_peak_share",
+          "win_fault_min",
+          "anon_fault_ratio",
+          "file_fault_ratio",
+          "write_fault_ratio",
+          "instruction_fault_ratio",
+          "mmap_per_ms",
+          "munmap_per_ms",
+          "brk_per_ms",
+          "mm_syscall_per_ms",
+          "mmap_bytes_per_ms",
+          "warmup_ipc",
+          "steady_ipc",
+          "phase_ipc_ratio",
+          "warmup_llc_mpki",
+          "steady_llc_mpki",
+          "phase_llc_ratio",
+          "phase_fault_ratio"
+        ]
+      },
+      {
+        "token": "core",
+        "description": "Ablation token 'core'.",
+        "n_features": 8,
+        "features": [
+          "ipc",
+          "cpi",
+          "samples_per_ms",
+          "win_ipc_mean",
+          "win_ipc_std",
+          "win_ipc_p95",
+          "win_ipc_peak_share",
+          "win_ipc_min"
+        ]
+      },
+      {
+        "token": "cache",
+        "description": "Ablation token 'cache'.",
+        "n_features": 12,
+        "features": [
+          "llc_load_miss_rate",
+          "llc_store_miss_rate",
+          "llc_mpki",
+          "llc_store_mpki",
+          "win_llc_mpki_mean",
+          "win_llc_mpki_std",
+          "win_llc_mpki_p95",
+          "win_llc_mpki_peak_share",
+          "win_llc_mpki_min",
+          "warmup_llc_mpki",
+          "steady_llc_mpki",
+          "phase_llc_ratio"
+        ]
+      },
+      {
+        "token": "tlb",
+        "description": "Ablation token 'tlb'.",
+        "n_features": 13,
+        "features": [
+          "dtlb_miss_rate",
+          "dtlb_mpki",
+          "itlb_mpki",
+          "win_dtlb_mpki_mean",
+          "win_dtlb_mpki_std",
+          "win_dtlb_mpki_p95",
+          "win_dtlb_mpki_peak_share",
+          "win_dtlb_mpki_min",
+          "win_itlb_mpki_mean",
+          "win_itlb_mpki_std",
+          "win_itlb_mpki_p95",
+          "win_itlb_mpki_peak_share",
+          "win_itlb_mpki_min"
+        ]
+      },
+      {
+        "token": "fault",
+        "description": "Ablation token 'fault'.",
+        "n_features": 12,
+        "features": [
+          "fault_per_ki",
+          "fault_per_ms",
+          "win_fault_mean",
+          "win_fault_std",
+          "win_fault_p95",
+          "win_fault_peak_share",
+          "win_fault_min",
+          "anon_fault_ratio",
+          "file_fault_ratio",
+          "write_fault_ratio",
+          "instruction_fault_ratio",
+          "phase_fault_ratio"
+        ]
+      }
+    ]
+  },
+  "n_params": 182596,
+  "device": "cpu",
+  "training_objective": {
+    "aux_class_lambda": 0.05,
+    "class_balance_power": 0.5,
+    "class_weights": {
+      "i_better": 0.787632,
+      "tie": 1.424735,
+      "j_better": 0.787632
+    }
+  },
+  "tie_strategy": {
+    "tie_threshold": 0.05,
+    "near_tie_threshold": 0.25,
+    "tie_reg_weight": 0.35,
+    "near_tie_reg_weight": 0.65
+  },
+  "splits": {
+    "train_programs": 90,
+    "val_programs": 19,
+    "test_programs": 20,
+    "train_pairs": 1026,
+    "val_pairs": 228,
+    "test_pairs": 240
+  },
+  "split_magnitude_bins": {
+    "train": {
+      "tie": 136,
+      "near_tie": 172,
+      "far": 718
+    },
+    "val": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 152
+    },
+    "test": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 164
+    }
+  },
+  "results": {
+    "train": {
+      "n": 1026,
+      "mae": 1.1023,
+      "rmse": 1.5875,
+      "r2": 0.1849,
+      "dir_acc": 0.6708,
+      "acc_3cls": 0.5712,
+      "aux_acc_3cls": 0.346,
+      "aux_tie_recall": 0.4118
+    },
+    "val": {
+      "n": 228,
+      "mae": 1.4182,
+      "rmse": 2.0805,
+      "r2": 0.0529,
+      "dir_acc": 0.6094,
+      "acc_3cls": 0.4912,
+      "aux_acc_3cls": 0.3246,
+      "aux_tie_recall": 0.6389
+    },
+    "test": {
+      "n": 240,
+      "mae": 1.3224,
+      "rmse": 1.7984,
+      "r2": 0.1723,
+      "dir_acc": 0.6422,
+      "acc_3cls": 0.5458,
+      "aux_acc_3cls": 0.35,
+      "aux_tie_recall": 0.5278
+    }
+  },
+  "per_pair": {
+    "O0-O1": {
+      "n": 20,
+      "mae": 1.5204,
+      "rmse": 1.9136,
+      "r2": -0.3422,
+      "dir_acc": 0.6,
+      "acc_3cls": 0.6,
+      "aux_acc_3cls": 0.3,
+      "aux_tie_recall": NaN
+    },
+    "O0-O2": {
+      "n": 20,
+      "mae": 1.6304,
+      "rmse": 2.0957,
+      "r2": -0.6948,
+      "dir_acc": 0.7,
+      "acc_3cls": 0.65,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": NaN
+    },
+    "O0-O3": {
+      "n": 20,
+      "mae": 1.716,
+      "rmse": 2.2336,
+      "r2": -0.5884,
+      "dir_acc": 0.7,
+      "acc_3cls": 0.7,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": NaN
+    },
+    "O1-O2": {
+      "n": 20,
+      "mae": 0.8453,
+      "rmse": 1.1363,
+      "r2": -1.3652,
+      "dir_acc": 0.7647,
+      "acc_3cls": 0.65,
+      "aux_acc_3cls": 0.5,
+      "aux_tie_recall": 1.0
+    },
+    "O1-O3": {
+      "n": 20,
+      "mae": 0.9399,
+      "rmse": 1.2687,
+      "r2": -1.6858,
+      "dir_acc": 0.6875,
+      "acc_3cls": 0.55,
+      "aux_acc_3cls": 0.5,
+      "aux_tie_recall": 0.75
+    },
+    "O2-O3": {
+      "n": 20,
+      "mae": 0.8271,
+      "rmse": 1.1559,
+      "r2": -15.643,
+      "dir_acc": 0.4444,
+      "acc_3cls": 0.3,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": 0.3636
+    }
+  },
+  "history": {
+    "train_loss": [
+      0.827877
+    ],
+    "val_loss": [
+      0.715142
+    ],
+    "train_reg_loss": [
+      0.734058
+    ],
+    "val_reg_loss": [
+      0.647181
+    ],
+    "train_aux_class_loss": [
+      1.876395
+    ],
+    "val_aux_class_loss": [
+      1.359212
+    ]
+  }
+}

@@ -1,0 +1,283 @@
+{
+  "model": "HotspotWindowTokenPairTransformer",
+  "config": "hotspot_token_base",
+  "seed": 42,
+  "pairs_path": "train_set/pairs.parquet",
+  "run_features_path": "train_set/run_features.parquet",
+  "output_dir": "train_set/tmp_hotspot_token_smoke",
+  "architecture": "[summary+top6 hotspot_window tokens]x2->TransformerEncoder(3L,4H,ffn=256)->[summary_i;summary_j;summary_i-summary_j]->reg_head+cls_head",
+  "source_isolation": {
+    "baseline_script": "scripts/train_transformer.py",
+    "experimental_script": "scripts/experimental/hotspot_token/train_hotspot_token_transformer.py",
+    "schema_script": "scripts/experimental/hotspot_token/hotspot_token_schema.py",
+    "overwrites_baseline_outputs": false
+  },
+  "token_schema": {
+    "top_k": 6,
+    "tokens_per_program": 7,
+    "summary_token": {
+      "token": "summary",
+      "description": "Global run-level summary token built from the existing z-score run features."
+    },
+    "hotspot_tokens": {
+      "token_prefix": "hotspot_window",
+      "count": 6,
+      "selection": "top-k windows ranked by memory-pressure hotspot score within each run",
+      "window_feature_names": [
+        "rel_pos",
+        "instructions_share",
+        "ipc",
+        "llc_mpki_log1p",
+        "dtlb_mpki_log1p",
+        "itlb_mpki_log1p",
+        "fault_per_ki_log1p",
+        "mm_syscall_per_ki_log1p",
+        "samples_per_ms_log1p",
+        "hotspot_score"
+      ],
+      "score_formula": "score = sqrt(instructions_share) * (pos_z(llc_mpki) + pos_z(dtlb_mpki) + 0.5*pos_z(itlb_mpki) + pos_z(fault_per_ki) + 0.5*pos_z(mm_syscall_per_ki) + 0.75*pos_z(low_ipc))"
+    }
+  },
+  "token_cache_summary": {
+    "n_runs": 506,
+    "top_k": 6,
+    "window_feature_names": [
+      "rel_pos",
+      "instructions_share",
+      "ipc",
+      "llc_mpki_log1p",
+      "dtlb_mpki_log1p",
+      "itlb_mpki_log1p",
+      "fault_per_ki_log1p",
+      "mm_syscall_per_ki_log1p",
+      "samples_per_ms_log1p",
+      "hotspot_score"
+    ],
+    "token_shape": [
+      6,
+      10
+    ],
+    "window_count": {
+      "min": 57,
+      "median": 60.0,
+      "max": 60
+    },
+    "active_window_count": {
+      "min": 5,
+      "median": 59.0,
+      "max": 60
+    },
+    "padding_token_count": {
+      "mean": 0.001976284584980237,
+      "max": 1
+    }
+  },
+  "token_scaler": {
+    "feature_names": [
+      "rel_pos",
+      "instructions_share",
+      "ipc",
+      "llc_mpki_log1p",
+      "dtlb_mpki_log1p",
+      "itlb_mpki_log1p",
+      "fault_per_ki_log1p",
+      "mm_syscall_per_ki_log1p",
+      "samples_per_ms_log1p",
+      "hotspot_score"
+    ],
+    "n_tokens": 2099,
+    "mean": [
+      0.4608682096004486,
+      0.03724336996674538,
+      1.445061206817627,
+      0.21730771660804749,
+      0.06282182782888412,
+      0.0025632192846387625,
+      0.9948015213012695,
+      0.2174123376607895,
+      1.3339359760284424,
+      1.952088475227356
+    ],
+    "std": [
+      0.3082831799983978,
+      0.10611595213413239,
+      0.7189549207687378,
+      0.6369739770889282,
+      0.2757653295993805,
+      0.011970113962888718,
+      1.47465181350708,
+      0.5673896074295044,
+      1.3120113611221313,
+      1.390661597251892
+    ]
+  },
+  "n_params": 179908,
+  "device": "cpu",
+  "log_ratio_clip": 6.0,
+  "training_objective": {
+    "regression_loss": "weighted_huber",
+    "classification_loss": "weighted_cross_entropy",
+    "direction_loss": "disabled",
+    "loss_formula": "L = L_reg + aux_class_lambda * L_CE + direction_lambda * L_dir",
+    "aux_class_enabled": true,
+    "aux_class_lambda": 0.05,
+    "class_balance_power": 0.5,
+    "class_weights": {
+      "i_better": 0.787632,
+      "tie": 1.424735,
+      "j_better": 0.787632
+    },
+    "final_train_loss": 0.926728,
+    "final_val_loss": 0.774109,
+    "final_val_reg_loss": 0.700865,
+    "final_val_aux_class_loss": 1.464883
+  },
+  "tie_strategy": {
+    "tie_threshold": 0.05,
+    "near_tie_threshold": 0.25,
+    "tie_reg_weight": 0.35,
+    "near_tie_reg_weight": 0.65,
+    "aux_class_lambda": 0.05,
+    "class_balance_power": 0.5,
+    "direction_lambda": 0.0
+  },
+  "splits": {
+    "train_programs": 90,
+    "val_programs": 19,
+    "test_programs": 20,
+    "train_pairs": 1026,
+    "val_pairs": 228,
+    "test_pairs": 240
+  },
+  "split_magnitude_bins": {
+    "train": {
+      "tie": 136,
+      "near_tie": 172,
+      "far": 718
+    },
+    "val": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 152
+    },
+    "test": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 164
+    }
+  },
+  "results": {
+    "train": {
+      "n": 1026,
+      "mae": 1.2401,
+      "rmse": 1.6466,
+      "r2": 0.123,
+      "dir_acc": 0.6697,
+      "acc_3cls": 0.5692,
+      "aux_acc_3cls": 0.425,
+      "aux_tie_recall": 0.1765
+    },
+    "val": {
+      "n": 228,
+      "mae": 1.5291,
+      "rmse": 2.2841,
+      "r2": -0.1415,
+      "dir_acc": 0.5365,
+      "acc_3cls": 0.4342,
+      "aux_acc_3cls": 0.4035,
+      "aux_tie_recall": 0.1667
+    },
+    "test": {
+      "n": 240,
+      "mae": 1.5287,
+      "rmse": 2.0703,
+      "r2": -0.097,
+      "dir_acc": 0.6029,
+      "acc_3cls": 0.4917,
+      "aux_acc_3cls": 0.4292,
+      "aux_tie_recall": 0.3056
+    }
+  },
+  "per_pair": {
+    "O0-O1": {
+      "n": 20,
+      "mae": 1.646,
+      "rmse": 2.1966,
+      "r2": -0.7686,
+      "dir_acc": 0.65,
+      "acc_3cls": 0.6,
+      "aux_acc_3cls": 0.3,
+      "aux_tie_recall": NaN
+    },
+    "O0-O2": {
+      "n": 20,
+      "mae": 1.9461,
+      "rmse": 2.4287,
+      "r2": -1.2763,
+      "dir_acc": 0.65,
+      "acc_3cls": 0.65,
+      "aux_acc_3cls": 0.45,
+      "aux_tie_recall": NaN
+    },
+    "O0-O3": {
+      "n": 20,
+      "mae": 1.9211,
+      "rmse": 2.4072,
+      "r2": -0.8449,
+      "dir_acc": 0.75,
+      "acc_3cls": 0.7,
+      "aux_acc_3cls": 0.45,
+      "aux_tie_recall": NaN
+    },
+    "O1-O2": {
+      "n": 20,
+      "mae": 1.0222,
+      "rmse": 1.2834,
+      "r2": -2.0169,
+      "dir_acc": 0.3529,
+      "acc_3cls": 0.3,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": 0.3333
+    },
+    "O1-O3": {
+      "n": 20,
+      "mae": 0.7614,
+      "rmse": 0.9474,
+      "r2": -0.4977,
+      "dir_acc": 0.5,
+      "acc_3cls": 0.35,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": 0.5
+    },
+    "O2-O3": {
+      "n": 20,
+      "mae": 0.9782,
+      "rmse": 1.2833,
+      "r2": -19.5117,
+      "dir_acc": 0.5556,
+      "acc_3cls": 0.2,
+      "aux_acc_3cls": 0.4,
+      "aux_tie_recall": 0.2727
+    }
+  },
+  "history": {
+    "train_loss": [
+      0.926728
+    ],
+    "val_loss": [
+      0.774109
+    ],
+    "train_reg_loss": [
+      0.836044
+    ],
+    "val_reg_loss": [
+      0.700865
+    ],
+    "train_aux_class_loss": [
+      1.813685
+    ],
+    "val_aux_class_loss": [
+      1.464883
+    ]
+  }
+}

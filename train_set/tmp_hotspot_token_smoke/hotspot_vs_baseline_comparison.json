@@ -1,0 +1,191 @@
+{
+  "generated_at": "2026-05-19 17:06:24 UTC",
+  "seed": 42,
+  "pairs_path": "train_set/pairs.parquet",
+  "run_features_path": "train_set/run_features.parquet",
+  "baseline": {
+    "model_path": "train_set/model_transformer.pt",
+    "eval_path": "train_set/model_transformer_eval.json",
+    "model_name": "PairTransformer",
+    "n_params": 178628
+  },
+  "experiment": {
+    "model_path": "train_set/tmp_hotspot_token_smoke/model_hotspot_token_transformer.pt",
+    "eval_path": "train_set/tmp_hotspot_token_smoke/model_hotspot_token_eval.json",
+    "model_name": "HotspotWindowTokenPairTransformer",
+    "n_params": 179908,
+    "config": "hotspot_token_base"
+  },
+  "thresholds": {
+    "tie_threshold": 0.05,
+    "near_tie_threshold": 0.25
+  },
+  "split": {
+    "test_programs": 20,
+    "test_pairs": 240
+  },
+  "overall_test": {
+    "n": 240,
+    "baseline": {
+      "n": 240,
+      "mae": 0.5678,
+      "rmse": 0.8685,
+      "r2": 0.8069,
+      "dir_acc": 0.902,
+      "acc_3cls": 0.7958,
+      "aux_acc_3cls": 0.8417,
+      "aux_tie_recall": 0.6667,
+      "label_counts": {
+        "i_better": 102,
+        "j_better": 102,
+        "tie": 36
+      }
+    },
+    "experiment": {
+      "n": 240,
+      "mae": 1.5287,
+      "rmse": 2.0703,
+      "r2": -0.097,
+      "dir_acc": 0.6029,
+      "acc_3cls": 0.4917,
+      "aux_acc_3cls": 0.4292,
+      "aux_tie_recall": 0.3056,
+      "label_counts": {
+        "i_better": 102,
+        "j_better": 102,
+        "tie": 36
+      }
+    },
+    "delta": {
+      "mae": 0.9609,
+      "rmse": 1.2018,
+      "r2": -0.9039,
+      "dir_acc": -0.2991,
+      "acc_3cls": -0.3041,
+      "aux_acc_3cls": -0.4125,
+      "aux_tie_recall": -0.3611
+    }
+  },
+  "focused_slices": {
+    "tie": {
+      "n": 36,
+      "baseline": {
+        "n": 36,
+        "mae": 0.1641,
+        "rmse": 0.2288,
+        "r2": -87.1897,
+        "dir_acc": NaN,
+        "acc_3cls": 0.3889,
+        "aux_acc_3cls": 0.6667,
+        "aux_tie_recall": 0.6667,
+        "label_counts": {
+          "tie": 36
+        }
+      },
+      "experiment": {
+        "n": 36,
+        "mae": 0.7417,
+        "rmse": 0.8996,
+        "r2": -1362.6231,
+        "dir_acc": NaN,
+        "acc_3cls": 0.0,
+        "aux_acc_3cls": 0.3056,
+        "aux_tie_recall": 0.3056,
+        "label_counts": {
+          "tie": 36
+        }
+      },
+      "delta": {
+        "mae": 0.5776,
+        "rmse": 0.6708,
+        "r2": -1275.4334,
+        "dir_acc": null,
+        "acc_3cls": -0.3889,
+        "aux_acc_3cls": -0.3611,
+        "aux_tie_recall": -0.3611
+      }
+    },
+    "near_tie": {
+      "n": 40,
+      "baseline": {
+        "n": 40,
+        "mae": 0.2455,
+        "rmse": 0.3202,
+        "r2": -5.276,
+        "dir_acc": 0.7,
+        "acc_3cls": 0.65,
+        "aux_acc_3cls": 0.575,
+        "aux_tie_recall": NaN,
+        "label_counts": {
+          "i_better": 20,
+          "j_better": 20
+        }
+      },
+      "experiment": {
+        "n": 40,
+        "mae": 1.1231,
+        "rmse": 1.4008,
+        "r2": -119.1532,
+        "dir_acc": 0.525,
+        "acc_3cls": 0.5,
+        "aux_acc_3cls": 0.35,
+        "aux_tie_recall": NaN,
+        "label_counts": {
+          "i_better": 20,
+          "j_better": 20
+        }
+      },
+      "delta": {
+        "mae": 0.8776,
+        "rmse": 1.0806,
+        "r2": -113.8772,
+        "dir_acc": -0.175,
+        "acc_3cls": -0.15,
+        "aux_acc_3cls": -0.225,
+        "aux_tie_recall": null
+      }
+    },
+    "O2-O3": {
+      "n": 40,
+      "baseline": {
+        "n": 40,
+        "mae": 0.2735,
+        "rmse": 0.3793,
+        "r2": -0.6405,
+        "dir_acc": 0.6667,
+        "acc_3cls": 0.475,
+        "aux_acc_3cls": 0.575,
+        "aux_tie_recall": 0.5455,
+        "label_counts": {
+          "i_better": 9,
+          "j_better": 9,
+          "tie": 22
+        }
+      },
+      "experiment": {
+        "n": 40,
+        "mae": 0.9889,
+        "rmse": 1.3092,
+        "r2": -18.5397,
+        "dir_acc": 0.6667,
+        "acc_3cls": 0.275,
+        "aux_acc_3cls": 0.375,
+        "aux_tie_recall": 0.2727,
+        "label_counts": {
+          "i_better": 9,
+          "j_better": 9,
+          "tie": 22
+        }
+      },
+      "delta": {
+        "mae": 0.7154,
+        "rmse": 0.9299,
+        "r2": -17.8992,
+        "dir_acc": 0.0,
+        "acc_3cls": -0.2,
+        "aux_acc_3cls": -0.2,
+        "aux_tie_recall": -0.2728
+      }
+    }
+  }
+}

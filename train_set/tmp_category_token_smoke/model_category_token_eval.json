@@ -1,0 +1,359 @@
+{
+  "model": "CategoryTokenPairTransformer",
+  "architecture": "[summary+6 category tokens]x2->TransformerEncoder(3L,4H,ffn=256)->[summary_i;summary_j;summary_i-summary_j]->reg_head+cls_head",
+  "source_isolation": {
+    "baseline_script": "scripts/train_transformer.py",
+    "experimental_script": "scripts/experimental/category_token/train_category_token_transformer.py",
+    "category_schema": "scripts/experimental/category_token/category_schema.py",
+    "overwrites_baseline_outputs": false
+  },
+  "token_schema": {
+    "include_summary_token": true,
+    "n_total_features": 53,
+    "n_category_tokens": 6,
+    "n_tokens_per_program": 7,
+    "category_order": [
+      "core",
+      "cache",
+      "tlb",
+      "fault",
+      "mm",
+      "phase"
+    ],
+    "token_order": [
+      "summary",
+      "core",
+      "cache",
+      "tlb",
+      "fault",
+      "mm",
+      "phase"
+    ],
+    "tokens": [
+      {
+        "token": "summary",
+        "description": "Global run-level summary projection over all non-time features.",
+        "n_features": 53,
+        "features": [
+          "ipc",
+          "cpi",
+          "llc_load_miss_rate",
+          "llc_store_miss_rate",
+          "llc_mpki",
+          "llc_store_mpki",
+          "dtlb_miss_rate",
+          "dtlb_mpki",
+          "itlb_mpki",
+          "fault_per_ki",
+          "fault_per_ms",
+          "samples_per_ms",
+          "win_ipc_mean",
+          "win_ipc_std",
+          "win_ipc_p95",
+          "win_ipc_peak_share",
+          "win_ipc_min",
+          "win_llc_mpki_mean",
+          "win_llc_mpki_std",
+          "win_llc_mpki_p95",
+          "win_llc_mpki_peak_share",
+          "win_llc_mpki_min",
+          "win_dtlb_mpki_mean",
+          "win_dtlb_mpki_std",
+          "win_dtlb_mpki_p95",
+          "win_dtlb_mpki_peak_share",
+          "win_dtlb_mpki_min",
+          "win_itlb_mpki_mean",
+          "win_itlb_mpki_std",
+          "win_itlb_mpki_p95",
+          "win_itlb_mpki_peak_share",
+          "win_itlb_mpki_min",
+          "win_fault_mean",
+          "win_fault_std",
+          "win_fault_p95",
+          "win_fault_peak_share",
+          "win_fault_min",
+          "anon_fault_ratio",
+          "file_fault_ratio",
+          "write_fault_ratio",
+          "instruction_fault_ratio",
+          "mmap_per_ms",
+          "munmap_per_ms",
+          "brk_per_ms",
+          "mm_syscall_per_ms",
+          "mmap_bytes_per_ms",
+          "warmup_ipc",
+          "steady_ipc",
+          "phase_ipc_ratio",
+          "warmup_llc_mpki",
+          "steady_llc_mpki",
+          "phase_llc_ratio",
+          "phase_fault_ratio"
+        ]
+      },
+      {
+        "token": "core",
+        "description": "Execution efficiency and IPC distribution features.",
+        "n_features": 8,
+        "features": [
+          "ipc",
+          "cpi",
+          "samples_per_ms",
+          "win_ipc_mean",
+          "win_ipc_std",
+          "win_ipc_p95",
+          "win_ipc_peak_share",
+          "win_ipc_min"
+        ]
+      },
+      {
+        "token": "cache",
+        "description": "LLC pressure, cache miss rates, and LLC phase features.",
+        "n_features": 12,
+        "features": [
+          "llc_load_miss_rate",
+          "llc_store_miss_rate",
+          "llc_mpki",
+          "llc_store_mpki",
+          "win_llc_mpki_mean",
+          "win_llc_mpki_std",
+          "win_llc_mpki_p95",
+          "win_llc_mpki_peak_share",
+          "win_llc_mpki_min",
+          "warmup_llc_mpki",
+          "steady_llc_mpki",
+          "phase_llc_ratio"
+        ]
+      },
+      {
+        "token": "tlb",
+        "description": "dTLB/iTLB pressure and window-level TLB dynamics.",
+        "n_features": 13,
+        "features": [
+          "dtlb_miss_rate",
+          "dtlb_mpki",
+          "itlb_mpki",
+          "win_dtlb_mpki_mean",
+          "win_dtlb_mpki_std",
+          "win_dtlb_mpki_p95",
+          "win_dtlb_mpki_peak_share",
+          "win_dtlb_mpki_min",
+          "win_itlb_mpki_mean",
+          "win_itlb_mpki_std",
+          "win_itlb_mpki_p95",
+          "win_itlb_mpki_peak_share",
+          "win_itlb_mpki_min"
+        ]
+      },
+      {
+        "token": "fault",
+        "description": "Page fault rates, fault subtype ratios, and fault phase features.",
+        "n_features": 12,
+        "features": [
+          "fault_per_ki",
+          "fault_per_ms",
+          "win_fault_mean",
+          "win_fault_std",
+          "win_fault_p95",
+          "win_fault_peak_share",
+          "win_fault_min",
+          "anon_fault_ratio",
+          "file_fault_ratio",
+          "write_fault_ratio",
+          "instruction_fault_ratio",
+          "phase_fault_ratio"
+        ]
+      },
+      {
+        "token": "mm",
+        "description": "MM syscall density and allocation throughput features.",
+        "n_features": 5,
+        "features": [
+          "mmap_per_ms",
+          "munmap_per_ms",
+          "brk_per_ms",
+          "mm_syscall_per_ms",
+          "mmap_bytes_per_ms"
+        ]
+      },
+      {
+        "token": "phase",
+        "description": "Warmup versus steady-state IPC phase features.",
+        "n_features": 3,
+        "features": [
+          "warmup_ipc",
+          "steady_ipc",
+          "phase_ipc_ratio"
+        ]
+      }
+    ]
+  },
+  "n_params": 183620,
+  "device": "cpu",
+  "log_ratio_clip": 6.0,
+  "training_objective": {
+    "regression_loss": "weighted_huber",
+    "classification_loss": "weighted_cross_entropy",
+    "direction_loss": "disabled",
+    "loss_formula": "L = L_reg + aux_class_lambda * L_CE + direction_lambda * L_dir",
+    "aux_class_enabled": true,
+    "aux_class_lambda": 0.05,
+    "class_balance_power": 0.5,
+    "class_weights": {
+      "i_better": 0.787632,
+      "tie": 1.424735,
+      "j_better": 0.787632
+    },
+    "final_train_loss": 0.775322,
+    "final_val_loss": 0.689644,
+    "final_val_reg_loss": 0.621464,
+    "final_val_aux_class_loss": 1.363603
+  },
+  "tie_strategy": {
+    "tie_threshold": 0.05,
+    "near_tie_threshold": 0.25,
+    "tie_reg_weight": 0.35,
+    "near_tie_reg_weight": 0.65,
+    "aux_class_lambda": 0.05,
+    "class_balance_power": 0.5,
+    "direction_lambda": 0.0
+  },
+  "splits": {
+    "train_programs": 90,
+    "val_programs": 19,
+    "test_programs": 20,
+    "train_pairs": 1026,
+    "val_pairs": 228,
+    "test_pairs": 240
+  },
+  "split_magnitude_bins": {
+    "train": {
+      "tie": 136,
+      "near_tie": 172,
+      "far": 718
+    },
+    "val": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 152
+    },
+    "test": {
+      "tie": 36,
+      "near_tie": 40,
+      "far": 164
+    }
+  },
+  "results": {
+    "train": {
+      "n": 1026,
+      "mae": 1.0232,
+      "rmse": 1.4216,
+      "r2": 0.3463,
+      "dir_acc": 0.7079,
+      "acc_3cls": 0.6092,
+      "aux_acc_3cls": 0.4337,
+      "aux_tie_recall": 0.0294
+    },
+    "val": {
+      "n": 228,
+      "mae": 1.3604,
+      "rmse": 2.2188,
+      "r2": -0.0772,
+      "dir_acc": 0.5833,
+      "acc_3cls": 0.4825,
+      "aux_acc_3cls": 0.4474,
+      "aux_tie_recall": 0.0
+    },
+    "test": {
+      "n": 240,
+      "mae": 1.2426,
+      "rmse": 1.7715,
+      "r2": 0.1968,
+      "dir_acc": 0.6912,
+      "acc_3cls": 0.6,
+      "aux_acc_3cls": 0.3875,
+      "aux_tie_recall": 0.1111
+    }
+  },
+  "per_pair": {
+    "O0-O1": {
+      "n": 20,
+      "mae": 1.4695,
+      "rmse": 1.9282,
+      "r2": -0.3627,
+      "dir_acc": 0.8,
+      "acc_3cls": 0.75,
+      "aux_acc_3cls": 0.45,
+      "aux_tie_recall": NaN
+    },
+    "O0-O2": {
+      "n": 20,
+      "mae": 1.7453,
+      "rmse": 2.2985,
+      "r2": -1.0387,
+      "dir_acc": 0.8,
+      "acc_3cls": 0.8,
+      "aux_acc_3cls": 0.6,
+      "aux_tie_recall": NaN
+    },
+    "O0-O3": {
+      "n": 20,
+      "mae": 1.8757,
+      "rmse": 2.4182,
+      "r2": -0.8618,
+      "dir_acc": 0.8,
+      "acc_3cls": 0.8,
+      "aux_acc_3cls": 0.45,
+      "aux_tie_recall": NaN
+    },
+    "O1-O2": {
+      "n": 20,
+      "mae": 0.7861,
+      "rmse": 0.9914,
+      "r2": -0.8004,
+      "dir_acc": 0.7059,
+      "acc_3cls": 0.6,
+      "aux_acc_3cls": 0.35,
+      "aux_tie_recall": 0.0
+    },
+    "O1-O3": {
+      "n": 20,
+      "mae": 0.8046,
+      "rmse": 0.9801,
+      "r2": -0.6028,
+      "dir_acc": 0.5625,
+      "acc_3cls": 0.5,
+      "aux_acc_3cls": 0.3,
+      "aux_tie_recall": 0.0
+    },
+    "O2-O3": {
+      "n": 20,
+      "mae": 0.647,
+      "rmse": 0.778,
+      "r2": -6.5392,
+      "dir_acc": 0.5556,
+      "acc_3cls": 0.35,
+      "aux_acc_3cls": 0.3,
+      "aux_tie_recall": 0.2727
+    }
+  },
+  "history": {
+    "train_loss": [
+      0.775322
+    ],
+    "val_loss": [
+      0.689644
+    ],
+    "train_reg_loss": [
+      0.692029
+    ],
+    "val_reg_loss": [
+      0.621464
+    ],
+    "train_aux_class_loss": [
+      1.665859
+    ],
+    "val_aux_class_loss": [
+      1.363603
+    ]
+  }
+}
