@@ -776,14 +776,135 @@ $$
 
 所以，如果从当前仓库继续往前推，优先级更像是：
 
-1. 在 fixed-work / hotspot 两条结构上继续做 pooling、gating、tie 校准；
-2. 再考虑是否把这两类 token 混合；
+1. 在 fixed-work / hotspot 两条结构上继续做更结构化的 pooling、gating、tie 校准；
+2. 如果要做 hybrid，需要显式的 family-wise gating / fusion，而不是直接把两类 token 无差别拼接；
 3. 只有当这些结构已经稳定优于 baseline 时，再评估双向 cross-attention 是否值得接入。
+
+这里有一个刚补完的负结果也很重要：**不能把“还需要更好的 pooling”简单理解成“把 bucket token 直接做 mean-pool 就行”**。
+
+### 7.3.4 负结果补充：naive pooled head 没有修复 fixed-work 分支，反而放大了局部激进性
+
+为了验证前面的判断，当前仓库又补了一条更小的 isolated 分支：
+
+- [scripts/experimental/fixed_work_token_pooled/train_fixed_work_token_pooled_transformer.py](../scripts/experimental/fixed_work_token_pooled/train_fixed_work_token_pooled_transformer.py)
+- [scripts/experimental/fixed_work_token_pooled/compare_with_baseline.py](../scripts/experimental/fixed_work_token_pooled/compare_with_baseline.py)
+- [scripts/experimental/compare_token_branches_extended.py](../scripts/experimental/compare_token_branches_extended.py)
+
+对应报告在：
+
+- [train_set/fixed_work_token_pooled_transformer/fixed_work_pooled_vs_baseline_comparison.md](../train_set/fixed_work_token_pooled_transformer/fixed_work_pooled_vs_baseline_comparison.md)
+- [train_set/token_branch_comparison_extended/token_branch_comparison_extended.md](../train_set/token_branch_comparison_extended/token_branch_comparison_extended.md)
+
+这个 pooled 版本没有改 token 化本身，只把 pair head 从：
+
+$$
+[\tilde h_i^{summary}; \tilde h_j^{summary}; \tilde h_i^{summary} - \tilde h_j^{summary}]
+$$
+
+改成同时读入每一侧编码后的 summary 输出、bucket token 的简单均值池化输出，以及这两组表示的差分。
+
+如果 fixed-work 的主要问题真的是“head 只看 summary，忽略了 bucket 局部信息”，那么这个最小改动本来应该至少改善 tie / near-tie 校准。
+
+但实际结果不是这样：
+
+- `mae`: `0.5678 -> 0.6479`
+- `r2`: `0.8069 -> 0.7494`
+- `dir_acc`: `0.9020 -> 0.8578`
+- `acc_3cls`: `0.7958 -> 0.7292`
+- `aux_tie_recall`: `0.6667 -> 0.6389`
+
+重点切片上，它只有一个明显变好：
+
+- `O2-O3` `dir_acc`: `0.6667 -> 0.8889`
+
+但与此同时：
+
+- near-tie `dir_acc` 变差：`0.7000 -> 0.6750`
+- tie `aux_tie_recall` 仍低于 baseline：`0.6667 -> 0.6389`
+- overall 指标比原始 `FixedWorkToken` 也更差
+
+这说明：
+
+1. fixed-work bucket 里的局部信息确实很强，否则不会把 `O2-O3` 推到四条 token 分支里最高；
+2. 但**简单 side mean-pool 会把这种局部信号放大成更激进的局部判别器**，没有把它转成更稳的整体校准；
+3. 因而 fixed-work 分支当前的短板并不只是“summary head 太弱”，而更像是：
+   - 需要更有选择性的 token pooling / gating；
+   - 需要更明确的 tie-aware aggregation / calibration；
+   - 不能直接用无差别平均来汇总所有 bucket token。
+
+所以，当前更合理的后续方向应该进一步收紧为：
+
+1. 不再继续尝试这种 naive mean-pool；
+2. 若还要改 head，优先做带选择性的 pooling / gating，或显式面向 tie 的校准；
+3. 若要扩展 token 表示，不应直接做 token family 的无差别拼接，而更可能需要显式的 family-wise gating / fusion，避免不同局部信号互相稀释。
+
+### 7.3.5 正式混合分支：直接拼接 fixed-work 与 hotspot token 能改善整体 3-class 校准，但会稀释 O2-O3 信号
+
+沿着上面的判断，当前仓库已经补了一条正式 hybrid 分支：
+
+- [scripts/experimental/fixed_work_hotspot_token/train_fixed_work_hotspot_token_transformer.py](../scripts/experimental/fixed_work_hotspot_token/train_fixed_work_hotspot_token_transformer.py)
+- [scripts/experimental/fixed_work_hotspot_token/compare_with_baseline.py](../scripts/experimental/fixed_work_hotspot_token/compare_with_baseline.py)
+- [scripts/experimental/compare_token_branches_all.py](../scripts/experimental/compare_token_branches_all.py)
+
+对应报告在：
+
+- [train_set/fixed_work_hotspot_token_transformer/fixed_work_hotspot_vs_baseline_comparison.md](../train_set/fixed_work_hotspot_token_transformer/fixed_work_hotspot_vs_baseline_comparison.md)
+- [train_set/token_branch_comparison_all/token_branch_comparison_all.md](../train_set/token_branch_comparison_all/token_branch_comparison_all.md)
+
+这个 hybrid 版本仍然刻意保持最小改动：
+
+1. 每侧保留 1 个 summary token；
+2. 再把 6 个 fixed-work bucket token 和 6 个 hotspot window token 直接拼到同一个 token 序列里；
+3. head 继续只读 encoder 后的 summary 输出，不额外引入 pooled head。
+
+也就是说，它测试的不是“更强的 pooling”，而是**fixed-work 与 hotspot 两类局部结构能否通过共享 self-attention 自然互补**。
+
+当前 overall test 的结果是：
+
+- `mae`: `0.5678 -> 0.6237`
+- `r2`: `0.8069 -> 0.7681`
+- `dir_acc`: `0.9020 -> 0.8971`
+- `acc_3cls`: `0.7958 -> 0.8000`
+- `aux_tie_recall`: `0.6667 -> 0.6667`
+
+这组结果和前面几条分支不同，呈现的是一种更“折中”的行为：
+
+1. 它没有超过 baseline 的回归误差，也没有超过 `FixedWorkToken` 的总体方向性；
+2. 但它把 overall `acc_3cls` 提到了当前 token 分支里最高的 `0.8000`；
+3. 同时 tie recall 回到了与 baseline 持平的 `0.6667`。
+
+如果只看 overall 指标，hybrid 看起来像是把 `FixedWorkToken` 的方向性优势和 `CategoryToken` 式的 tie 稳定性做了某种折中。
+
+但重点切片揭示了它的真实代价：
+
+- near-tie `dir_acc`: `0.7000 -> 0.6750`
+- `O2-O3` `dir_acc`: `0.6667 -> 0.6111`
+- tie `aux_tie_recall`: `0.6667 -> 0.6667`
+
+尤其是 `O2-O3` 这一项很关键。前面真正给出积极信号的两条分支是：
+
+- `HotspotToken`: `0.7778`
+- `FixedWorkToken`: `0.7778`
+
+而 hybrid 直接掉回了 `0.6111`。
+
+这说明：
+
+1. **fixed-work 与 hotspot 的局部信号并不会因为“放到一起”就自动叠加**；
+2. 直接拼接两类 token 更像是在提升整体三分类校准的平滑性，但会稀释对 `O2-O3` 这类细粒度方向判断最有价值的局部证据；
+3. 因而 hybrid 的问题不是“缺少更多 token”，而是**缺少更有选择性的 family-wise fusion 机制**。
+
+从五条 token 分支并排看，当前更合理的判断已经更清楚：
+
+1. `FixedWorkToken` 仍然是 overall `dir_acc` 最强的方向性分支；
+2. `FixedWorkHotspot` 拿到了目前最好的 overall `acc_3cls`，且 tie recall 回到 baseline；
+3. 但它没有保住 `HotspotToken` / `FixedWorkToken` 原本在 `O2-O3` 上的正向信号；
+4. 所以如果后面还要继续做 hybrid，不应再是简单拼接，而应直接进入 family-wise gating / fusion 或显式的 slice-aware calibration。
 
 ## 8. 一句话总结
 
 **在当前仓库里，直接把现有 2-token 自注意力换成交叉注意力，不像是一次自然升级，更像是一次高风险、低收益的重参数化。**
 
-现在真正出现正向信号的，是 `HotspotToken` 和 `FixedWorkToken` 这类更贴近局部结构或工作进度的多 token 表示，而不是“先换成交叉注意力再说”。
+现在真正出现正向信号的，是 `HotspotToken` 和 `FixedWorkToken` 这类更贴近局部结构或工作进度的多 token 表示；而最新的 hybrid 结果又进一步说明，**这些局部 token family 也不是简单相加就会更好**。
 
 如果输入仍是单个 run-level 摘要向量，交叉注意力很难真正发挥优势；如果未来先把输入改成更有局部对应关系的 token 序列，它才可能在“窗口对齐、工作阶段对齐、局部模式交互”上体现价值。
