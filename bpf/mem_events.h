@@ -27,9 +27,8 @@ struct collector_config {
     __u64 window_ns;       /* 时间窗大小（纳秒），用于用户态对齐，内核侧不使用 */
     __u8  emit_events;     /* 1 = 向 ring buffer 输出逐事件记录 */
     __u8  per_tid;         /* 1 = 以 (pid,tid) 为 map 键，做线程级聚合 */
-    __u8  enable_lbr;      /* 1 = on_lbr_sample 处理器已挂载，记录 LBR 数据 */
     __u8  track_children;  /* 1 = 同时采集目标进程的子进程/线程（配合 child_pid_set） */
-    __u8  _pad1[4];
+    __u8  _pad1[5];
 };
 
 /* ------------------------------------------------------------------ */
@@ -53,9 +52,6 @@ struct pid_mem_stats {
     /* page fault */
     __u64 minor_faults;      /* minor page fault 次数 */
     __u64 major_faults;      /* major page fault 次数 */
-    /* LBR */
-    __u64 lbr_samples;       /* LBR 采样触发次数 */
-    __u64 lbr_entries;       /* 累积读取的 LBR 条目数 */
     /* misc */
     __u64 samples;           /* 所有事件总采样数 */
     __u64 last_seen_ns;      /* 最近一次事件时间戳 (CLOCK_MONOTONIC) */
@@ -70,16 +66,6 @@ struct pid_mem_stats {
 #define MEM_EVENT_DTLB_MISS       3
 #define MEM_EVENT_MINOR_FAULT     4
 #define MEM_EVENT_MAJOR_FAULT     5
-#define MEM_EVENT_LBR             6  /* LBR 分支栈采样 */
-
-#define MAX_LBR_ENTRIES           8
-
-/* 单条 LBR（Last Branch Record）分支记录（避免与 vmlinux.h 中的 lbr_entry 冲突） */
-struct lbr_sample {
-    __u64 from_ip;
-    __u64 to_ip;
-    __u64 flags;   /* mispred/predicted/cycles 等，直接取 perf_branch_entry 第三字 */
-};
 
 struct mem_event {
     __u64 ts_ns;        /* 事件时间戳 (CLOCK_MONOTONIC) */
@@ -87,10 +73,7 @@ struct mem_event {
     __u32 tid;          /* 线程 ID */
     char  comm[16];     /* 进程名 */
     __u8  event_type;   /* MEM_EVENT_* 常量 */
-    __u8  lbr_nr;       /* 有效 LBR 条目数（仅 MEM_EVENT_LBR 有效） */
-    __u16 _pad0;
-    __u32 _pad1;
+    __u8  _pad0[7];
     __u64 addr;         /* 出错/采样地址 */
     __u64 ip;           /* 采样时的指令指针 */
-    struct lbr_sample lbr[MAX_LBR_ENTRIES]; /* LBR 数据（非 LBR 事件时全零） */
 };

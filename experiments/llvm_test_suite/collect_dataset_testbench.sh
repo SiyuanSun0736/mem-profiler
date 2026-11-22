@@ -20,7 +20,7 @@
 #   │   ├── aha_20260419_220101/
 #   │   │   ├── run_metadata.jsonl
 #   │   │   ├── window_metrics.jsonl
-#   │   │   └── events.jsonl            （仅 emit-events/lbr 时存在）
+#   │   │   └── events.jsonl            （仅 emit-events 时存在）
 #   │   └── ...
 #   └── manifest_bcc_<VARIANT>.jsonl    数据集清单（每行一条 JSON）
 #
@@ -50,7 +50,6 @@
 #   DRYRUN            1=只解析和打印命令，不实际采集（默认 0）
 #   DEDUP_AFTER_COLLECT 1=采集结束后自动去重并重建 manifest（默认 1）
 #   EMIT_EVENTS       1=输出 events.jsonl（默认 0）
-#   ENABLE_LBR        1=打开 --lbr（隐含 emit-events，默认 0）
 #   PER_TID           1=按 TID 聚合（默认 0）
 #   EXTRA_LOADER_ARGS 透传给 loader.py 的额外参数（默认 --track-children）
 # =============================================================================
@@ -83,7 +82,6 @@ RETRY_MAX="${RETRY_MAX:-2}"
 DRYRUN="${DRYRUN:-0}"
 DEDUP_AFTER_COLLECT="${DEDUP_AFTER_COLLECT:-1}"
 EMIT_EVENTS="${EMIT_EVENTS:-0}"
-ENABLE_LBR="${ENABLE_LBR:-0}"
 PER_TID="${PER_TID:-0}"
 EXTRA_LOADER_ARGS="${EXTRA_LOADER_ARGS:- --track-children}"
 
@@ -110,7 +108,7 @@ usage() {
     cat <<EOF
 用法: $0 [-v VARIANT] [-b BIN_DIR] [-t TEST_DIR] [-d OUTPUT_ROOT]
          [-w DURATION_SEC] [-i WINDOW_SEC] [-r SAMPLE_RATE] [-s BENCH]
-         [-n] [-e] [-l] [-p]
+         [-n] [-e] [-p]
 
 选项:
   -v VARIANT       变体名称，默认 O3
@@ -123,7 +121,6 @@ usage() {
   -s BENCH         只采集指定 benchmark
   -n               DRYRUN 模式
   -e               打开 --emit-events
-  -l               打开 --lbr（隐含 emit-events）
   -p               打开 --per-tid
   -h               显示帮助
 
@@ -138,7 +135,7 @@ EOF
     exit 0
 }
 
-while getopts "v:b:t:d:w:i:r:s:nelph" opt; do
+while getopts "v:b:t:d:w:i:r:s:neph" opt; do
     case "$opt" in
         v) VARIANT="$OPTARG" ;;
         b) BIN_DIR="$OPTARG" ;;
@@ -150,7 +147,6 @@ while getopts "v:b:t:d:w:i:r:s:nelph" opt; do
         s) BENCH_FILTER="$OPTARG" ;;
         n) DRYRUN=1 ;;
         e) EMIT_EVENTS=1 ;;
-        l) ENABLE_LBR=1; EMIT_EVENTS=1 ;;
         p) PER_TID=1 ;;
         h) usage ;;
         *) echo "未知选项：-$OPTARG" >&2; exit 1 ;;
@@ -308,7 +304,6 @@ run_single_bench() {
 
     [[ "$DRYRUN" -eq 1 ]] && single_cmd+=(-n)
     [[ "$EMIT_EVENTS" -eq 1 ]] && single_cmd+=(-e)
-    [[ "$ENABLE_LBR" -eq 1 ]] && single_cmd+=(-l)
     [[ "$PER_TID" -eq 1 ]] && single_cmd+=(-p)
 
     PYTHON_BIN="$PYTHON_BIN" \

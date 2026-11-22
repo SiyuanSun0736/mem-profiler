@@ -110,7 +110,11 @@ track_latest_proc_stat() {
     local out_file="$2"
     while kill -0 "$pid" 2>/dev/null; do
         if [[ -r "/proc/$pid/stat" ]]; then
-            cat "/proc/$pid/stat" > "$out_file" 2>/dev/null || true
+            local content
+            content="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+            if [[ -n "$content" ]]; then
+                printf '%s\n' "$content" > "$out_file"
+            fi
         fi
         sleep 0.05
     done
@@ -328,19 +332,21 @@ fi
 
 echo "[2/5] perf stat..."
 if ! perf stat -x, -o "$REF_DIR/perf_stat.csv" -e "$PERF_STAT_EVENTS" -- \
-    timeout --preserve-status "${DURATION}s" "${WORKLOAD[@]}" \
+    timeout --preserve-status "$((DURATION + 5))s" "${WORKLOAD[@]}" \
     >"$LOG_DIR/perf_stat_workload.stdout.log" 2>"$LOG_DIR/perf_stat_workload.stderr.log"; then
     echo "[警告] perf stat 返回非零退出码；保留已生成的输出继续后续流程。" >&2
 fi
 
 echo "[3/5] perf record + perf report..."
 PERF_DATA="$REF_DIR/perf.data"
-if perf record -o "$PERF_DATA" -e "$PERF_RECORD_EVENT" -g -- \
-    timeout --preserve-status "${DURATION}s" "${WORKLOAD[@]}" \
-    >"$LOG_DIR/perf_record_workload.stdout.log" 2>"$LOG_DIR/perf_record_workload.stderr.log"; then
+perf record -o "$PERF_DATA" -e "$PERF_RECORD_EVENT" -g -- \
+    timeout --preserve-status "$((DURATION + 5))s" "${WORKLOAD[@]}" \
+    >"$LOG_DIR/perf_record_workload.stdout.log" 2>"$LOG_DIR/perf_record_workload.stderr.log" || true
+
+if [[ -s "$PERF_DATA" ]]; then
     perf report -i "$PERF_DATA" --stdio --no-children --percent-limit 0 > "$REF_DIR/perf_report.txt"
 else
-    echo "[警告] perf record 返回非零退出码；跳过 perf report。" >&2
+    echo "[警告] perf record 未生成有效的 perf.data；跳过 perf report。" >&2
 fi
 
 echo "[4/5] 函数级归因..."

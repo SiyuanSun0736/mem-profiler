@@ -6,7 +6,6 @@
  *   • LLC load/store 访问与 miss（perf_event 硬件采样）
  *   • dTLB load/store 访问与 miss（perf_event 硬件采样）
  *   • iTLB load 访问与 miss（perf_event 硬件采样）
- *   • LBR 分支栈采样（perf_event, bpf_read_branch_records, 需内核 >= 5.8）
  *   • minor / major page fault（kprobe/handle_mm_fault）
  *
  * 编译方式：
@@ -21,7 +20,6 @@
  *   mem_events_helpers.bpf.h  — 内联辅助函数 + HANDLER_PROLOGUE 宏
  *   mem_events_llc.bpf.h      — LLC load/store handler
  *   mem_events_tlb.bpf.h      — dTLB/iTLB handler
- *   mem_events_lbr.bpf.h      — LBR 分支栈采样 handler
  *   mem_events_fault.bpf.h    — page fault kprobe handler
  */
 
@@ -35,7 +33,6 @@
 #include "mem_events_helpers.bpf.h"
 #include "mem_events_llc.bpf.h"
 #include "mem_events_tlb.bpf.h"
-#include "mem_events_lbr.bpf.h"
 #include "mem_events_fault.bpf.h"
 
 char LICENSE[] SEC("license") = "GPL";

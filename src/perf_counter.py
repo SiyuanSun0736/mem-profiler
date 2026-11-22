@@ -54,6 +54,7 @@ _SOFT_OPEN_ERRNOS = {
 _UNSUPPORTED_EVENT_ERRNOS = {
     errno.EINVAL,
     errno.ENODEV,
+    errno.ENOENT,
     errno.ENOSYS,
     errno.EOPNOTSUPP,
 }

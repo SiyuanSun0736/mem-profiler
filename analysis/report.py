@@ -56,8 +56,6 @@ METRICS  = [
     "mprotect_bytes",
     "brk_growth_bytes",
     "brk_shrink_bytes",
-    "lbr_samples",
-    "lbr_entries",
 ]
 METRIC_LABELS = {
     "llc_loads":        "LLC Loads",
@@ -88,8 +86,6 @@ METRIC_LABELS = {
     "mprotect_bytes":   "mprotect Bytes",
     "brk_growth_bytes": "brk Growth Bytes",
     "brk_shrink_bytes": "brk Shrink Bytes",
-    "lbr_samples":      "LBR Samples",
-    "lbr_entries":      "LBR Entries",
 }
 
 

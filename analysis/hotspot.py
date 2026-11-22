@@ -51,8 +51,6 @@ METRICS = [
     "mprotect_bytes",
     "brk_growth_bytes",
     "brk_shrink_bytes",
-    "lbr_samples",
-    "lbr_entries",
     "samples",
 ]
 

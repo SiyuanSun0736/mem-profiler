@@ -213,40 +213,6 @@ static __always_inline void emit_mm_syscall_event(u32 pid,
     events_rb.ringbuf_output(ev, sizeof(*ev), 0);
 }
 
-static __always_inline void emit_lbr(struct bpf_perf_event_data *ctx,
-                                     u32 pid,
-                                     u32 tid,
-                                     u64 ip,
-                                     u8 nr,
-                                     struct perf_branch_entry *branches)
-{
-    if (!emit_events_enabled())
-        return;
-
-    struct mem_event_t *ev = event_scratch_get();
-    if (!ev)
-        return;
-    ev->ts_ns      = bpf_ktime_get_ns();
-    ev->pid        = pid;
-    ev->tid        = tid;
-    ev->event_type = MEM_EVENT_LBR;
-    ev->lbr_nr     = nr;
-    ev->addr       = ctx->addr;
-    ev->ip         = ip;
-    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
-
-#pragma unroll
-    for (int i = 0; i < MAX_LBR_ENTRIES; i++) {
-        if (i >= nr)
-            break;
-        ev->lbr[i].from_ip = branches[i].from;
-        ev->lbr[i].to_ip   = branches[i].to;
-        ev->lbr[i].flags   = ((__u64 *)&branches[i])[2];
-    }
-
-    events_rb.ringbuf_output(ev, sizeof(*ev), 0);
-}
-
 /* ================================================================== */
 /* BCC_PROLOGUE — 各 perf_event handler 公共入口宏                     */
 /* ================================================================== */

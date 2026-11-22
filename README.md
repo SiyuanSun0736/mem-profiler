@@ -11,7 +11,7 @@
 
 | 能力 | 说明 |
 |------|------|
-| eBPF 数据面 | CO-RE 风格内核程序 + BCC Python 原型，追踪 LLC / TLB / page fault，并可选导出 LBR |
+| eBPF 数据面 | CO-RE 风格内核程序 + BCC Python 原型，追踪 LLC / TLB / page fault，并支持按需逐事件采样 |
 | 细粒度指标提取 | 按 PID 或 TID 和时间窗聚合，输出标准化 JSONL |
 | 函数级热点归因 | 符号化采样地址 → 函数 / 文件 / 行号（P2 阶段） |
 | 分析报告生成 | 时序图、热点条形图、指标相关性热力图（matplotlib PDF） |
@@ -122,8 +122,8 @@ sudo python src/loader.py --comm nginx --window 1.0 --output data/run_001/ --dur
 # 按线程聚合并只观察指定 TID
 sudo python src/loader.py --pid <PID> --per-tid --tid <TID> --output data/run_tid/
 
-# 启用逐事件与 LBR 分支栈记录（P2 归因分析所需）
-sudo python src/loader.py --pid <PID> --emit-events --lbr --output data/run_001/
+# 启用逐事件记录（P2 归因分析所需）
+sudo python src/loader.py --pid <PID> --emit-events --output data/run_001/
 ```
 
 ### 热点分析（P1：PID 级）

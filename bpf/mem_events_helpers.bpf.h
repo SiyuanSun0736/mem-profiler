@@ -100,42 +100,9 @@ static __always_inline void emit_event(struct collector_config *cfg,
     ev->pid        = pid;
     ev->tid        = tid;
     ev->event_type = type;
-    ev->lbr_nr     = 0;
     ev->addr       = addr;
     ev->ip         = ip;
     bpf_get_current_comm(ev->comm, sizeof(ev->comm));
-    bpf_ringbuf_submit(ev, 0);
-}
-
-static __always_inline void emit_lbr(struct collector_config *cfg,
-                                     struct bpf_perf_event_data *bpf_ctx,
-                                     __u32 pid, __u32 tid, __u64 ip,
-                                     __u8 nr,
-                                     struct perf_branch_entry *branches)
-{
-    if (!cfg->emit_events)
-        return;
-    struct mem_event *ev = bpf_ringbuf_reserve(&events_rb, sizeof(*ev), 0);
-    if (!ev)
-        return;
-    ev->ts_ns      = bpf_ktime_get_ns();
-    ev->pid        = pid;
-    ev->tid        = tid;
-    ev->event_type = MEM_EVENT_LBR;
-    ev->lbr_nr     = nr;
-    ev->addr       = bpf_ctx->addr;
-    ev->ip         = ip;
-    bpf_get_current_comm(ev->comm, sizeof(ev->comm));
-
-#pragma unroll
-    for (int i = 0; i < MAX_LBR_ENTRIES; i++) {
-        if (i >= nr)
-            break;
-        ev->lbr[i].from_ip = branches[i].from;
-        ev->lbr[i].to_ip   = branches[i].to;
-        /* flags word: mispred/predicted/cycles/type packed in the third u64 */
-        ev->lbr[i].flags   = ((__u64 *)&branches[i])[2];
-    }
     bpf_ringbuf_submit(ev, 0);
 }
 
@@ -158,17 +125,6 @@ static __always_inline void emit_lbr(struct collector_config *cfg,
 #define HANDLER_PROLOGUE()                                                   \
     struct collector_config *cfg = cfg_get();                                \
     if (!cfg) return 0;                                                      \
-    __u64 _pidtid = bpf_get_current_pid_tgid();                             \
-    __u32 pid = _pidtid >> 32, tid = (__u32)_pidtid;                        \
-    if (!pid_allowed(pid, tid, cfg)) return 0;                               \
-    struct entity_key key = make_entity_key(pid, tid, cfg);                  \
-    struct pid_mem_stats *s = stats_get_or_init(&key);                       \
-    if (!s) return 0
-
-/* LBR handler 需要额外检查 enable_lbr 标志 */
-#define HANDLER_PROLOGUE_LBR()                                               \
-    struct collector_config *cfg = cfg_get();                                \
-    if (!cfg || !cfg->enable_lbr) return 0;                                  \
     __u64 _pidtid = bpf_get_current_pid_tgid();                             \
     __u32 pid = _pidtid >> 32, tid = (__u32)_pidtid;                        \
     if (!pid_allowed(pid, tid, cfg)) return 0;                               \

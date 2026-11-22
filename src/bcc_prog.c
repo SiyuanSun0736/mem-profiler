@@ -8,7 +8,7 @@
  * 本版本额外支持：
  *   • 更多 cache/TLB perf counter
  *   • 可选 per-TID 聚合 / TID 过滤
- *   • 可选 LBR 分支栈采样并通过 ring buffer 输出
+ *   • 可选逐事件并通过 ring buffer 输出
  *
  * 文件组织（均位于 src/ 目录下）：
  *   bcc_types.h    — 内核 helper 前置声明 + 共享结构体
@@ -16,7 +16,6 @@
  *   bcc_helpers.h  — 内联辅助函数 + BCC_PROLOGUE 宏
  *   bcc_llc.h      — LLC load/store handler
  *   bcc_tlb.h      — dTLB/iTLB handler
- *   bcc_lbr.h      — LBR 分支栈采样 handler
  *   bcc_fault.h    — page fault kprobe handler
  *   bcc_mm_syscalls.h — mmap/munmap/mprotect/brk handler
  */
@@ -27,6 +26,5 @@
 #include "bcc_pmu.h"
 #include "bcc_llc.h"
 #include "bcc_tlb.h"
-#include "bcc_lbr.h"
 #include "bcc_fault.h"
 #include "bcc_mm_syscalls.h"

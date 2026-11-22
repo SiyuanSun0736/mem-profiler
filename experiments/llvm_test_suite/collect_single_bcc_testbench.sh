@@ -37,7 +37,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DRYRUN="${DRYRUN:-0}"
 EMIT_EVENTS="${EMIT_EVENTS:-0}"
-ENABLE_LBR="${ENABLE_LBR:-0}"
 PER_TID="${PER_TID:-0}"
 EXTRA_LOADER_ARGS="${EXTRA_LOADER_ARGS:- --track-children}"
 
@@ -77,7 +76,7 @@ usage() {
     cat <<EOF
 用法: $0 [-v VARIANT] [-s BENCH] [-B BIN_PATH] [-T TEST_PATH] [-o OUTPUT_ROOT]
          [-O OUTPUT_DIR] [-w WINDOW_SEC] [-d DURATION_SEC] [-r SAMPLE_RATE]
-         [-n] [-e] [-l] [-p]
+         [-n] [-e] [-p]
 
 选项:
   -v VARIANT       变体名称，默认 O3
@@ -91,7 +90,6 @@ usage() {
     -r SAMPLE_RATE   perf sample period（每 N 次事件触发一次），默认 100
   -n               干跑：仅打印展开后的命令和 loader 调用
   -e               打开 --emit-events
-  -l               打开 --lbr（隐含 emit-events）
   -p               打开 --per-tid
   -h               显示帮助
 
@@ -103,7 +101,7 @@ EOF
         [[ -n "$detected" ]] && echo "当前检测到的 VARIANT: $detected"
 }
 
-while getopts "v:s:B:T:o:O:w:d:r:nelph" opt; do
+while getopts "v:s:B:T:o:O:w:d:r:neph" opt; do
     case "$opt" in
         v) VARIANT="$OPTARG" ;;
         s) BENCH="$OPTARG" ;;
@@ -116,7 +114,6 @@ while getopts "v:s:B:T:o:O:w:d:r:nelph" opt; do
         r) SAMPLE_RATE="$OPTARG" ;;
         n) DRYRUN=1 ;;
         e) EMIT_EVENTS=1 ;;
-        l) ENABLE_LBR=1; EMIT_EVENTS=1 ;;
         p) PER_TID=1 ;;
         h) usage; exit 0 ;;
         *) usage >&2; exit 1 ;;
@@ -186,7 +183,6 @@ LOADER_CMD=(
 [[ -n "$EXTRA_LOADER_ARGS" ]] && { read -ra _xtra <<< "$EXTRA_LOADER_ARGS"; LOADER_CMD+=("${_xtra[@]}"); }
 
 [[ "$EMIT_EVENTS" -eq 1 ]] && LOADER_CMD+=(--emit-events)
-[[ "$ENABLE_LBR" -eq 1 ]] && LOADER_CMD+=(--lbr)
 [[ "$PER_TID" -eq 1 ]] && LOADER_CMD+=(--per-tid)
 
 echo "[info] BIN_PATH:    $BIN_PATH"

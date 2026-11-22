@@ -5,7 +5,7 @@ collector.py — BCC 程序加载与周期性数据读取
   • 编译并加载 src/bcc_prog.c（BCC 原型版 eBPF 程序）
   • 绑定更多 perf_event（LLC / dTLB / iTLB）和 kprobe（page fault）
   • 可选按 TID 聚合，或过滤指定 TID
-  • 可选消费 ring buffer，导出逐事件与 LBR 分支栈信息
+  • 可选消费 ring buffer，导出逐事件记录
 """
 
 import ctypes
@@ -19,11 +19,12 @@ from typing import Any, Optional
 
 # perf_event_attr.flags 中表示 inherit 的永久位置（kernel 规范：踤足 0=disabled, 1=inherit …）
 _PERF_ATTR_FLAG_INHERIT: int = 1 << 1
+_PERF_ATTR_FLAG_EXCLUDE_KERNEL: int = 1 << 5
+_PERF_ATTR_FLAG_EXCLUDE_HV: int = 1 << 6
 
 from perf_counter import PerfCounterBackend, PerfCounterSnapshot
 
 _BCC_PROG_PATH = pathlib.Path(__file__).parent / "bcc_prog.c"
-_MAX_LBR_ENTRIES = 8
 _STALE_ENTITY_WINDOW_MULTIPLIER = 5.0
 _MIN_STALE_ENTITY_TIMEOUT_NS = 1_000_000_000
 
@@ -85,7 +86,6 @@ _EVENT_TYPE_NAMES = {
     3: "dtlb_miss",
     4: "minor_fault",
     5: "major_fault",
-    6: "lbr_sample",
     7: "mmap",
     8: "munmap",
     9: "mprotect",
@@ -146,19 +146,9 @@ class _PidMemStatsCtype(ctypes.Structure):
         ("mprotect_bytes", ctypes.c_uint64),
         ("brk_growth_bytes", ctypes.c_uint64),
         ("brk_shrink_bytes", ctypes.c_uint64),
-        ("lbr_samples", ctypes.c_uint64),
-        ("lbr_entries", ctypes.c_uint64),
         ("samples", ctypes.c_uint64),
         ("last_seen_ns", ctypes.c_uint64),
         ("comm", ctypes.c_char * 16),
-    ]
-
-
-class _LbrEntryCtype(ctypes.Structure):
-    _fields_ = [
-        ("from_ip", ctypes.c_uint64),
-        ("to_ip", ctypes.c_uint64),
-        ("flags", ctypes.c_uint64),
     ]
 
 
@@ -169,8 +159,7 @@ class _MemEventCtype(ctypes.Structure):
         ("tid", ctypes.c_uint32),
         ("comm", ctypes.c_char * 16),
         ("event_type", ctypes.c_uint8),
-        ("lbr_nr", ctypes.c_uint8),
-        ("_pad0", ctypes.c_uint16),
+        ("_pad0", ctypes.c_uint8 * 3),
         ("prot", ctypes.c_uint32),
         ("event_flags", ctypes.c_uint32),
         ("class_flags", ctypes.c_uint32),
@@ -181,7 +170,6 @@ class _MemEventCtype(ctypes.Structure):
         ("requested_addr", ctypes.c_uint64),
         ("vma_flags", ctypes.c_uint64),
         ("delta_bytes", ctypes.c_int64),
-        ("lbr", _LbrEntryCtype * _MAX_LBR_ENTRIES),
     ]
 
 
@@ -223,8 +211,6 @@ class PidStats:
     mprotect_bytes: int = 0
     brk_growth_bytes: int = 0
     brk_shrink_bytes: int = 0
-    lbr_samples: int = 0
-    lbr_entries: int = 0
     samples: int = 0
     last_seen_ns: int = 0
 
@@ -273,8 +259,6 @@ class WindowSnapshot:
                 delta.mprotect_bytes,
                 delta.brk_growth_bytes,
                 delta.brk_shrink_bytes,
-                delta.lbr_samples,
-                delta.lbr_entries,
                 delta.samples,
             )
         )
@@ -319,8 +303,6 @@ class WindowSnapshot:
             "mprotect_bytes": delta.mprotect_bytes,
             "brk_growth_bytes": delta.brk_growth_bytes,
             "brk_shrink_bytes": delta.brk_shrink_bytes,
-            "lbr_samples": delta.lbr_samples,
-            "lbr_entries": delta.lbr_entries,
             "samples": delta.samples,
         }
         if delta.tid:
@@ -344,7 +326,6 @@ class Collector:
         enable_itlb: bool = True,
         enable_fault: bool = True,
         enable_fault_classification: bool = True,
-        enable_lbr: bool = False,
         enable_mm_syscalls: bool = True,
         per_tid: bool = False,
         track_children: bool = False,
@@ -355,13 +336,12 @@ class Collector:
         self.target_comm = target_comm[:15]
         self.window_sec = window_sec
         self.sample_rate = sample_rate
-        self.emit_events = emit_events or enable_lbr
+        self.emit_events = emit_events
         self.enable_llc = enable_llc
         self.enable_dtlb = enable_dtlb
         self.enable_itlb = enable_itlb
         self.enable_fault = enable_fault
         self.enable_fault_classification = enable_fault_classification
-        self.enable_lbr = enable_lbr
         self.enable_mm_syscalls = enable_mm_syscalls
         self.per_tid = per_tid or target_tid > 0
         self.pmu_backend = pmu_backend
@@ -391,7 +371,7 @@ class Collector:
     def describe_collection_backend(self) -> str:
         if self._use_bcc_pmu:
             return "bcc"
-        if self.enable_fault or self.enable_lbr or self.enable_mm_syscalls:
+        if self.enable_fault or self.enable_mm_syscalls:
             return "hybrid_perf_event_open_bcc"
         return "perf_event_open"
 
@@ -464,11 +444,12 @@ class Collector:
         attr.sample_period = sample_period
         attr.sample_type = sample_type
         attr.branch_sample_type = branch_sample_type
+        attr.exclude_kernel = 1
+        attr.exclude_hv = 1
+        flags = getattr(attr, "flags", 0) | _PERF_ATTR_FLAG_EXCLUDE_KERNEL | _PERF_ATTR_FLAG_EXCLUDE_HV
         if inherit:
-            # 设置 perf_event_attr.inherit 位（flags 第 1 位）。
-            # BCC 的 ctypes 结构将位字段打包进the单个 flags u64字段；
-            # 直接 attr.inherit = 1 在部分 BCC 版本下不会卸写 C 结构内存。
-            attr.flags = getattr(attr, "flags", 0) | _PERF_ATTR_FLAG_INHERIT
+            flags |= _PERF_ATTR_FLAG_INHERIT
+        attr.flags = flags
         return attr
 
     def _attach_raw_event(
@@ -513,8 +494,7 @@ class Collector:
         multiplexes more events than there are hardware counters.
 
         inherit=True: 为所有 attr 设置 inherit 位，使内核将事件继承给子进程。
-            注意：LBR（PERF_SAMPLE_BRANCH_STACK）不支持 inherit，只应用于
-            LLC / dTLB / iTLB 这类 PMU 计数器事件组。
+            应用于 LLC / dTLB / iTLB 这类 PMU 计数器事件组。
 
         fallback_to_independent=False: 当 leader 绑定失败时不做独立降级，
             直接返回 False，由调用方决定 fallback 策略。
@@ -648,15 +628,6 @@ class Collector:
             row["is_private"] = bool(class_flags & _MEM_CLASS_PRIVATE)
             row["is_write"] = bool(class_flags & _MEM_CLASS_WRITE)
             row["is_exec"] = bool(class_flags & _MEM_CLASS_EXEC)
-        if ev.lbr_nr:
-            row["lbr"] = [
-                {
-                    "from_ip": int(ev.lbr[idx].from_ip),
-                    "to_ip": int(ev.lbr[idx].to_ip),
-                    "flags": int(ev.lbr[idx].flags),
-                }
-                for idx in range(min(int(ev.lbr_nr), _MAX_LBR_ENTRIES))
-            ]
         self._pending_events.append(row)
         return 0
 
@@ -684,6 +655,8 @@ class Collector:
             cflags=[
                 f"-I{src_dir}",
                 f"-DMM_SYSCALL_WRAPPER={1 if self._mm_syscall_wrapper else 0}",
+                "-fms-extensions",
+                "-Wno-microsoft-anon-tag",
             ],
         )
         bpf = self._bpf
@@ -947,32 +920,6 @@ class Collector:
                 "iTLB load miss",
             )
 
-        if self.enable_lbr:
-            # LBR requires a unique sample_type/branch_sample_type combination
-            # and cannot be grouped with cache events (different perf_event
-            # driver domains).  It is attached independently.
-            #
-            # 硬件限制：内核明确拒绝 PERF_SAMPLE_BRANCH_STACK + inherit=1 的组合。
-            # 当 track_children=True 时，改用 pid=-1（全局挂载），
-            # 依赖 eBPF task_allowed() + child_pid_set 在内核层过滤子代。
-            lbr_pid = -1 if self.track_children else None
-            self._attach_raw_event(
-                self._make_attr(
-                    Perf.PERF_TYPE_HARDWARE,
-                    _PERF_COUNT_HW_BRANCH_INSTRUCTIONS,
-                    self.sample_rate,
-                    sample_type=_PERF_SAMPLE_BRANCH_STACK,
-                    branch_sample_type=_PERF_SAMPLE_BRANCH_USER | _PERF_SAMPLE_BRANCH_ANY,
-                    # inherit 配置此处故意不开启：硬件不支持。
-                ),
-                "on_lbr_sample",
-                "LBR branch stack",
-                pid_override=lbr_pid,
-            )
-            if self.track_children:
-                print("[probe] LBR 全局挂载（pid=-1），依赖 eBPF child_pid_set 过滤子进程",
-                      flush=True)
-
         if self.enable_fault:
             bpf.attach_kprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault")
             bpf.attach_kretprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault_return")
@@ -981,7 +928,7 @@ class Collector:
         if self.enable_mm_syscalls:
             self._attach_mm_syscall_probes()
 
-        if self.track_children and (self.enable_fault or self.enable_lbr or self.enable_mm_syscalls):
+        if self.track_children and (self.enable_fault or self.enable_mm_syscalls):
             print(f"[info] track_children 已开启，启动子进程监控线程", flush=True)
             self._start_child_monitor()
 
@@ -1068,8 +1015,6 @@ class Collector:
                         agg.mprotect_bytes += int(cv.mprotect_bytes)
                         agg.brk_growth_bytes += int(cv.brk_growth_bytes)
                         agg.brk_shrink_bytes += int(cv.brk_shrink_bytes)
-                        agg.lbr_samples += int(cv.lbr_samples)
-                        agg.lbr_entries += int(cv.lbr_entries)
                         agg.samples += int(cv.samples)
                         agg.last_seen_ns = max(agg.last_seen_ns, int(cv.last_seen_ns))
                         if cv.comm and not agg.comm:
@@ -1151,8 +1096,6 @@ class Collector:
                     mprotect_bytes=max(0, agg.mprotect_bytes - prev.mprotect_bytes),
                     brk_growth_bytes=max(0, agg.brk_growth_bytes - prev.brk_growth_bytes),
                     brk_shrink_bytes=max(0, agg.brk_shrink_bytes - prev.brk_shrink_bytes),
-                    lbr_samples=max(0, agg.lbr_samples - prev.lbr_samples),
-                    lbr_entries=max(0, agg.lbr_entries - prev.lbr_entries),
                     samples=max(0, agg.samples - prev.samples),
                 )
             )

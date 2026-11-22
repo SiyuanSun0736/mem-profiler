@@ -89,14 +89,11 @@ struct bpf_perf_event_data {
  * Do not re-declare them here to avoid redefinition conflicts.
  */
 
-#define MAX_LBR_ENTRIES 8
-
 #define MEM_EVENT_LLC_LOAD_MISS   1
 #define MEM_EVENT_LLC_STORE_MISS  2
 #define MEM_EVENT_DTLB_MISS       3
 #define MEM_EVENT_MINOR_FAULT     4
 #define MEM_EVENT_MAJOR_FAULT     5
-#define MEM_EVENT_LBR             6
 #define MEM_EVENT_MMAP            7
 #define MEM_EVENT_MUNMAP          8
 #define MEM_EVENT_MPROTECT        9
@@ -178,21 +175,9 @@ struct pid_mem_stats_t {
     u64 mprotect_bytes;
     u64 brk_growth_bytes;
     u64 brk_shrink_bytes;
-    u64 lbr_samples;
-    u64 lbr_entries;
     u64 samples;
     u64 last_seen_ns;
     char comm[TASK_COMM_LEN];
-};
-
-struct lbr_entry_t {
-    u64 from_ip;
-    u64 to_ip;
-    u64 flags;
-};
-
-struct lbr_branch_scratch_t {
-    struct perf_branch_entry entries[MAX_LBR_ENTRIES];
 };
 
 struct mem_event_t {
@@ -201,8 +186,7 @@ struct mem_event_t {
     u32 tid;
     char comm[TASK_COMM_LEN];
     u8  event_type;
-    u8  lbr_nr;
-    u16 _pad0;
+    u8  _pad0[3];
     u32 prot;
     u32 event_flags;
     u32 class_flags;
@@ -213,5 +197,4 @@ struct mem_event_t {
     u64 requested_addr;
     u64 vma_flags;
     s64 delta_bytes;
-    struct lbr_entry_t lbr[MAX_LBR_ENTRIES];
 };

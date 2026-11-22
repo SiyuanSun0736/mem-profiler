@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--duration",     type=int,   default=0,
                    help="采集总时长（秒），0 = 手动 Ctrl-C 停止")
     p.add_argument("--sample-rate",  type=int,   default=100,
-                   help="采样型 probe 的 perf sample_period；当前主要影响 LBR 和 legacy BCC PMU backend，默认 100")
+                   help="采样型 probe 的 perf sample_period；当前主要影响 legacy BCC PMU backend，默认 100")
     p.add_argument(
         "--pmu-backend",
         type=str,
@@ -56,8 +56,6 @@ def parse_args() -> argparse.Namespace:
                    help="仅追踪指定 TID（线程 ID）；设置后自动启用 per-TID 聚合")
     p.add_argument("--per-tid",      action="store_true",
                    help="按 TID 聚合窗口指标，而非按 PID 聚合")
-    p.add_argument("--lbr",          action="store_true",
-                   help="启用 LBR 分支栈采样，并将 LBR 条目写入 events.jsonl")
     p.add_argument("--no-llc",       action="store_true", help="禁用 LLC 访问/miss 采样（PMU 组 1）")
     p.add_argument("--no-dtlb",      action="store_true", help="禁用 dTLB 访问/miss 采样（PMU 组 2）")
     p.add_argument("--no-itlb",      action="store_true", help="禁用 iTLB 访问/miss 采样（PMU 组 3）")
@@ -79,7 +77,6 @@ def parse_args() -> argparse.Namespace:
             "追踪目标进程的子进程和子线程（仅对 --pid 模式有效）。\n"
             "PMU 真计数后端会轮询 /proc 并为匹配线程打开 perf_event_open 计数器。\n"
             "legacy BCC PMU backend 则依赖 perf_event inherit=1。\n"
-            "LBR: 硬件限制不支持 inherit，轮切为 pid=-1 全局挂载 + eBPF child_pid_set 过滤。\n"
             "page fault kprobe: 已是全局探针，内核 child_pid_set 控制过滤。"
         ),
     )
@@ -117,13 +114,12 @@ def main() -> None:
         target_comm=target_comm,
         window_sec=args.window,
         sample_rate=args.sample_rate,
-        emit_events=args.emit_events or args.lbr,
+        emit_events=args.emit_events,
         enable_llc=not args.no_llc,
         enable_dtlb=not args.no_dtlb,
         enable_itlb=not args.no_itlb,
         enable_fault=not args.no_fault,
         enable_fault_classification=(not args.no_fault) and (not args.no_fault_classification),
-        enable_lbr=args.lbr,
         enable_mm_syscalls=not args.no_mm_syscalls,
         per_tid=args.per_tid,
         track_children=args.track_children,
@@ -150,13 +146,12 @@ def main() -> None:
         target_comm=target_comm,
         window_sec=args.window,
         sample_rate=args.sample_rate,
-        emit_events=args.emit_events or args.lbr,
+        emit_events=args.emit_events,
         enable_llc=not args.no_llc,
         enable_dtlb=not args.no_dtlb,
         enable_itlb=not args.no_itlb,
         enable_fault=not args.no_fault,
         enable_fault_classification=(not args.no_fault) and (not args.no_fault_classification),
-        enable_lbr=args.lbr,
         enable_mm_syscalls=not args.no_mm_syscalls,
         aggregation_scope="per_tid" if (args.per_tid or args.tid > 0) else "per_pid",
         collection_backend=collector.describe_collection_backend(),
