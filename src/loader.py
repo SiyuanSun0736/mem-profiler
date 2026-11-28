@@ -43,7 +43,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--duration",     type=int,   default=0,
                    help="采集总时长（秒），0 = 手动 Ctrl-C 停止")
     p.add_argument("--sample-rate",  type=int,   default=100,
-                   help="采样型 probe 的 perf sample_period；当前主要影响 legacy BCC PMU backend，默认 100")
+                   help="固定采样周期 sample_period（仅当 --sample-freq 0 时生效）")
+    p.add_argument("--sample-freq",  type=int,   default=4000,
+                   help="PMU 自适应采样频率（Hz，默认 4000，与 perf record 一致；设 0 回退到 --sample-rate）")
     p.add_argument(
         "--pmu-backend",
         type=str,
@@ -59,7 +61,14 @@ def parse_args() -> argparse.Namespace:
         help="Page fault 探测后端：tracepoint（极致轻量，默认）或 kprobe（深入 VMA 分析）",
     )
     p.add_argument("--emit-events",  action="store_true",
-                   help="同时向 ring buffer 写入逐事件记录（大采样量时会增加开销）")
+                   help="开启事件级 IP 归因记录（默认启用内核态 IP 聚合）")
+    p.add_argument(
+        "--event-mode",
+        type=str,
+        default="agg",
+        choices=["agg", "raw"],
+        help="事件采集模式：agg（内核态按 IP 聚合，极低开销，默认）或 raw（Ring Buffer 逐条输出）",
+    )
     p.add_argument("--sync-target",  action="store_true",
                    help="探针挂载完成后向目标 PID 发送 SIGCONT 恢复执行（配合 SIGSTOP 握手实现 0 丢失冷启动同步）")
     p.add_argument("--tid",          type=int, default=0,
@@ -124,7 +133,9 @@ def main() -> None:
         target_comm=target_comm,
         window_sec=args.window,
         sample_rate=args.sample_rate,
+        sample_freq=args.sample_freq,
         emit_events=args.emit_events,
+        event_mode=args.event_mode,
         enable_llc=not args.no_llc,
         enable_dtlb=not args.no_dtlb,
         enable_itlb=not args.no_itlb,

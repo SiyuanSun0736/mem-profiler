@@ -133,10 +133,38 @@ static __always_inline void touch_stats(struct pid_mem_stats_t *s)
 /* Ring buffer 输出                                                     */
 /* ================================================================== */
 
-static __always_inline void emit(u32 pid, u32 tid, u8 etype, u64 addr, u64 ip)
+static __always_inline bool agg_ip_enabled(void)
+{
+    u32 key = 0;
+    u32 *enabled = agg_ip_map.lookup(&key);
+    return enabled && *enabled != 0;
+}
+
+static __always_inline void record_ip_hotspot(u32 pid, u32 tid, u8 etype, u64 ip, u64 weight)
+{
+    struct ip_hotspot_key_t key = {};
+    key.pid = pid;
+    key.tid = tid;
+    key.ip = ip;
+    key.event_type = etype;
+    u64 w = weight > 0 ? weight : 1;
+    u64 *cnt = ip_hotspot_map.lookup(&key);
+    if (cnt) {
+        (*cnt) += w;
+    } else {
+        ip_hotspot_map.update(&key, &w);
+    }
+}
+
+static __always_inline void emit_weighted(u32 pid, u32 tid, u8 etype, u64 addr, u64 ip, u64 weight)
 {
     if (!emit_events_enabled())
         return;
+
+    if (agg_ip_enabled()) {
+        record_ip_hotspot(pid, tid, etype, ip, weight);
+        return;
+    }
 
     struct mem_event_t *ev = event_scratch_get();
     if (!ev)
@@ -151,6 +179,11 @@ static __always_inline void emit(u32 pid, u32 tid, u8 etype, u64 addr, u64 ip)
     events_rb.ringbuf_output(ev, sizeof(*ev), 0);
 }
 
+static __always_inline void emit(u32 pid, u32 tid, u8 etype, u64 addr, u64 ip)
+{
+    emit_weighted(pid, tid, etype, addr, ip, 1);
+}
+
 static __always_inline void emit_fault_event(u32 pid,
                                              u32 tid,
                                              u8 etype,
@@ -162,6 +195,11 @@ static __always_inline void emit_fault_event(u32 pid,
 {
     if (!emit_events_enabled())
         return;
+
+    if (agg_ip_enabled()) {
+        record_ip_hotspot(pid, tid, etype, ip, 1);
+        return;
+    }
 
     struct mem_event_t *ev = event_scratch_get();
     if (!ev)

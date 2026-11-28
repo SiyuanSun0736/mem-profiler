@@ -21,7 +21,7 @@ int on_llc_load_miss(struct bpf_perf_event_data *ctx)
     s->llc_load_misses += ctx->sample_period;
     touch_stats(s);
     u64 ip = PT_REGS_IP(&ctx->regs);
-    emit(pid, tid, 1, ip, ip);
+    emit_weighted(pid, tid, 1, ip, ip, ctx->sample_period);
     return 0;
 }
 
@@ -38,6 +38,6 @@ int on_llc_store_miss(struct bpf_perf_event_data *ctx)
     BCC_PROLOGUE();
     s->llc_store_misses += ctx->sample_period;
     touch_stats(s);
-    emit(pid, tid, 2, PT_REGS_IP(&ctx->regs), PT_REGS_IP(&ctx->regs));
+    emit_weighted(pid, tid, 2, PT_REGS_IP(&ctx->regs), PT_REGS_IP(&ctx->regs), ctx->sample_period);
     return 0;
 }

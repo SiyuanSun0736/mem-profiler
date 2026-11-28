@@ -320,7 +320,9 @@ class Collector:
         target_comm: str = "",
         window_sec: float = 1.0,
         sample_rate: int = 100,
+        sample_freq: int = 4000,
         emit_events: bool = False,
+        event_mode: str = "agg",
         enable_llc: bool = True,
         enable_dtlb: bool = True,
         enable_itlb: bool = True,
@@ -337,7 +339,9 @@ class Collector:
         self.target_comm = target_comm[:15]
         self.window_sec = window_sec
         self.sample_rate = sample_rate
+        self.sample_freq = sample_freq
         self.emit_events = emit_events
+        self.event_mode = event_mode
         self.enable_llc = enable_llc
         self.enable_dtlb = enable_dtlb
         self.enable_itlb = enable_itlb
@@ -360,6 +364,7 @@ class Collector:
 
         self._bpf: Optional[Any] = None
         self._prev: dict[tuple[int, int], PidStats] = {}
+        self._prev_ip_hotspots: dict[tuple[int, int, int, int], int] = {}
         self._pending_events: list[dict] = []
         self._events_open = False
         self._syscall_prefix: bytes = b"sys_"
@@ -443,7 +448,11 @@ class Collector:
         attr = Perf.perf_event_attr()
         attr.type = perf_type
         attr.config = config
-        attr.sample_period = sample_period
+        if self.sample_freq > 0:
+            attr.freq = 1
+            attr.sample_freq = self.sample_freq
+        else:
+            attr.sample_period = sample_period
         attr.sample_type = sample_type
         attr.branch_sample_type = branch_sample_type
         attr.exclude_kernel = 1
@@ -469,7 +478,8 @@ class Collector:
             pid = self.target_pid if self.target_pid else -1
         try:
             self._bpf.attach_perf_event_raw(attr=attr, fn_name=fn_name.encode(), pid=pid)
-            print(f"[probe] {label} sample_period={attr.sample_period}", flush=True)
+            rate_desc = f"sample_freq={attr.sample_freq}Hz" if getattr(attr, "freq", 0) else f"sample_period={attr.sample_period}"
+            print(f"[probe] {label} {rate_desc}", flush=True)
             return True
         except Exception as exc:
             print(f"[警告] {label} 绑定失败 ({exc})，已跳过", flush=True)
@@ -678,7 +688,11 @@ class Collector:
         if self.emit_events:
             emit_events_map = bpf["emit_events_map"]
             emit_events_map[emit_events_map.Key(0)] = emit_events_map.Leaf(1)
-            self._open_event_stream()
+            if self.event_mode == "agg":
+                agg_ip_map = bpf["agg_ip_map"]
+                agg_ip_map[agg_ip_map.Key(0)] = agg_ip_map.Leaf(1)
+            else:
+                self._open_event_stream()
         fault_classification_map = bpf["fault_classification_map"]
         fault_classification_map[fault_classification_map.Key(0)] = (
             fault_classification_map.Leaf(1 if self.enable_fault_classification else 0)
@@ -1105,6 +1119,27 @@ class Collector:
             )
 
         self._prev = current
+        if self.emit_events and self.event_mode == "agg" and self._bpf is not None:
+            try:
+                ip_map = self._bpf["ip_hotspot_map"]
+                for k, per_cpu_vals in ip_map.items():
+                    total_cnt = sum(int(v.value if hasattr(v, "value") else v) for v in per_cpu_vals)
+                    key_tuple = (int(k.pid), int(k.tid), int(k.event_type), int(k.ip))
+                    prev_cnt = self._prev_ip_hotspots.get(key_tuple, 0)
+                    delta_cnt = max(0, total_cnt - prev_cnt)
+                    self._prev_ip_hotspots[key_tuple] = total_cnt
+                    if delta_cnt > 0:
+                        etype = int(k.event_type)
+                        snap.events.append({
+                            "pid": int(k.pid),
+                            "tid": int(k.tid),
+                            "event_type": etype,
+                            "event_name": _EVENT_TYPE_NAMES.get(etype, "unknown"),
+                            "ip": int(k.ip),
+                            "count": delta_cnt,
+                        })
+            except Exception as exc:
+                print(f"[警告] 读取 ip_hotspot_map 失败: {exc}", file=sys.stderr, flush=True)
         if self._pending_events:
             snap.events.extend(self._pending_events)
             self._pending_events = []

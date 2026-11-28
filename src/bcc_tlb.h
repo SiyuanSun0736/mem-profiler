@@ -25,7 +25,7 @@ int on_dtlb_load_miss(struct bpf_perf_event_data *ctx)
     s->dtlb_load_misses += ctx->sample_period;
     s->dtlb_misses += ctx->sample_period;
     touch_stats(s);
-    emit(pid, tid, 3, PT_REGS_IP(&ctx->regs), PT_REGS_IP(&ctx->regs));
+    emit_weighted(pid, tid, 3, PT_REGS_IP(&ctx->regs), PT_REGS_IP(&ctx->regs), ctx->sample_period);
     return 0;
 }
 
@@ -43,7 +43,7 @@ int on_dtlb_store_miss(struct bpf_perf_event_data *ctx)
     s->dtlb_store_misses += ctx->sample_period;
     s->dtlb_misses += ctx->sample_period;
     touch_stats(s);
-    emit(pid, tid, 3, PT_REGS_IP(&ctx->regs), PT_REGS_IP(&ctx->regs));
+    emit_weighted(pid, tid, 3, PT_REGS_IP(&ctx->regs), PT_REGS_IP(&ctx->regs), ctx->sample_period);
     return 0;
 }
 

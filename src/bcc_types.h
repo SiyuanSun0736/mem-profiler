@@ -198,3 +198,11 @@ struct mem_event_t {
     u64 vma_flags;
     s64 delta_bytes;
 };
+
+struct ip_hotspot_key_t {
+    u32 pid;
+    u32 tid;
+    u64 ip;
+    u8  event_type;
+    u8  _pad[7];
+};

@@ -108,10 +108,11 @@ def attribute_to_functions(
     })
     for ev in filtered:
         ip = int(ev.get("ip", 0))
+        cnt = int(ev.get("count", 1))
         sym = ip_to_sym.get(ip)
         if sym:
             key = sym.func
-            func_counts[key]["count"] += 1
+            func_counts[key]["count"] += cnt
             func_counts[key]["dso"]         = sym.dso
             func_counts[key]["source_file"] = sym.source_file
             func_counts[key]["source_line"] = sym.source_line

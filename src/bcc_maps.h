@@ -22,7 +22,10 @@ BPF_ARRAY(target_comm_map, struct task_comm_filter_t, 1);
 BPF_HASH(child_pid_set, u32, u8, 4096);
 BPF_ARRAY(per_tid_map,    u32, 1);
 BPF_ARRAY(emit_events_map, u32, 1);
+BPF_ARRAY(agg_ip_map,      u32, 1);
 BPF_ARRAY(fault_classification_map, u32, 1);
+
+BPF_PERCPU_HASH(ip_hotspot_map, struct ip_hotspot_key_t, u64, 16384);
 
 BPF_HASH(pending_fault_args, u32, struct pending_fault_t, 8192);
 BPF_HASH(pending_mmap_args, u32, struct pending_mmap_args_t, 8192);
