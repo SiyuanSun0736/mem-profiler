@@ -71,6 +71,7 @@ def attribute_to_functions(
     metric: str,
     top_n: int,
     maps_file: str = "",
+    user_only: bool = True,
 ) -> pd.DataFrame:
     """
     对目标 PID 的 events 按 IP 地址符号化，聚合到函数级，返回 top_n 热点。
@@ -81,6 +82,11 @@ def attribute_to_functions(
         e for e in events
         if e.get("pid") == pid and e.get("event_type") == target_etype
     ]
+    if user_only:
+        filtered = [
+            e for e in filtered
+            if int(e.get("ip", 0)) < 0x7fff000000000000
+        ]
 
     if not filtered:
         print(f"[警告] PID={pid} metric={metric} 无事件记录", flush=True)
@@ -128,6 +134,8 @@ def main() -> None:
     p.add_argument("--output",  required=True, help="输出目录")
     p.add_argument("--metric",  default="llc_load_misses", choices=METRICS)
     p.add_argument("--top",     type=int, default=30)
+    p.add_argument("--include-kernel", dest="user_only", action="store_false", default=True,
+                   help="同时包含内核空间指令地址并解析为内核符号（默认仅保留用户空间）")
     args = p.parse_args()
 
     data_dir = pathlib.Path(args.data)
@@ -135,7 +143,10 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     events = load_events(data_dir)
-    df = attribute_to_functions(events, args.pid, args.metric, args.top, maps_file=args.maps_file)
+    df = attribute_to_functions(
+        events, args.pid, args.metric, args.top,
+        maps_file=args.maps_file, user_only=args.user_only
+    )
 
     if df.empty:
         print("[info] 无函数级归因结果，退出。")

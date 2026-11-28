@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>
 
 #define LLC_BUF_SIZE (64 * 1024 * 1024)   // 64 MB (exceeds 16MB/32MB L3)
 #define TLB_BUF_SIZE (32 * 1024 * 1024)   // 32 MB
@@ -65,18 +66,25 @@ void workload_cpu_compute(int iterations) {
 int main(int argc, char **argv) {
     int duration_sec = 0;
     int fixed_rounds = 0;
+    int wait_sync = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-r") == 0 && i + 1 < argc) {
             fixed_rounds = atoi(argv[++i]);
         } else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
             duration_sec = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--wait-sync") == 0) {
+            wait_sync = 1;
         } else if (atoi(argv[i]) > 0 && fixed_rounds == 0 && duration_sec == 0) {
             duration_sec = atoi(argv[i]);
         }
     }
     if (fixed_rounds <= 0 && duration_sec <= 0) {
         duration_sec = 6;
+    }
+
+    if (wait_sync) {
+        raise(SIGSTOP);
     }
 
     uint8_t *llc_buf = (uint8_t *)malloc(LLC_BUF_SIZE);

@@ -9,6 +9,7 @@ loader.py — eBPF 采集器入口（BCC 原型阶段）
 """
 
 import argparse
+import os
 import pathlib
 import signal
 import sys
@@ -50,8 +51,17 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "perf_event_open", "bcc"],
         help="PMU 指标后端：auto 优先 perf_event_open 真计数，失败时回退到 BCC sampling",
     )
+    p.add_argument(
+        "--fault-backend",
+        type=str,
+        default="tracepoint",
+        choices=["tracepoint", "kprobe"],
+        help="Page fault 探测后端：tracepoint（极致轻量，默认）或 kprobe（深入 VMA 分析）",
+    )
     p.add_argument("--emit-events",  action="store_true",
                    help="同时向 ring buffer 写入逐事件记录（大采样量时会增加开销）")
+    p.add_argument("--sync-target",  action="store_true",
+                   help="探针挂载完成后向目标 PID 发送 SIGCONT 恢复执行（配合 SIGSTOP 握手实现 0 丢失冷启动同步）")
     p.add_argument("--tid",          type=int, default=0,
                    help="仅追踪指定 TID（线程 ID）；设置后自动启用 per-TID 聚合")
     p.add_argument("--per-tid",      action="store_true",
@@ -124,6 +134,7 @@ def main() -> None:
         per_tid=args.per_tid,
         track_children=args.track_children,
         pmu_backend=args.pmu_backend,
+        fault_backend=args.fault_backend,
     )
 
     exporter = None
@@ -138,6 +149,13 @@ def main() -> None:
 
     print(f"[info] 开始采集 → {out_dir}  (Ctrl-C 停止)", flush=True)
     collector.start()
+
+    if args.sync_target and target_pid:
+        try:
+            os.kill(target_pid, signal.SIGCONT)
+            print(f"[info] 已向目标 PID={target_pid} 发送 SIGCONT，恢复执行", flush=True)
+        except OSError as e:
+            print(f"[warn] 无法向目标 PID={target_pid} 发送 SIGCONT: {e}", flush=True)
 
     exporter = Exporter(
         out_dir=out_dir,
@@ -170,6 +188,12 @@ def main() -> None:
                 f"[window {window_id:04d}] {len(snapshot.entries)} 条窗口记录 / {len(snapshot.events)} 条事件",
                 flush=True,
             )
+            if target_pid and not args.track_children:
+                try:
+                    os.kill(target_pid, 0)
+                except OSError:
+                    # 目标进程已结束，结束采集
+                    break
     finally:
         collector.stop()
         if exporter is not None:

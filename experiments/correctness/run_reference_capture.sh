@@ -136,6 +136,19 @@ launch_workload_direct() {
     echo $!
 }
 
+launch_workload_sync() {
+    local stdout_log="$1"
+    local stderr_log="$2"
+    shift 2
+    local sync_lib="$ROOT_DIR/experiments/micro_benchmark/libsync.so"
+    if [[ -f "$sync_lib" ]]; then
+        env LD_PRELOAD="$sync_lib" SYNC_ATTACH=1 "$@" >"$stdout_log" 2>"$stderr_log" &
+    else
+        "$@" >"$stdout_log" 2>"$stderr_log" &
+    fi
+    echo $!
+}
+
 OUT_DIR=""
 DURATION=30
 WINDOW=1.0
@@ -288,7 +301,7 @@ echo "workload: $(cat "$OUT_DIR/workload_command.txt")"
 echo ""
 
 echo "[1/5] eBPF + /proc 快照..."
-EBPF_WORKLOAD_PID="$(launch_workload_direct "$LOG_DIR/ebpf_workload.stdout.log" "$LOG_DIR/ebpf_workload.stderr.log" "${WORKLOAD[@]}")"
+EBPF_WORKLOAD_PID="$(launch_workload_sync "$LOG_DIR/ebpf_workload.stdout.log" "$LOG_DIR/ebpf_workload.stderr.log" "${WORKLOAD[@]}")"
 echo "$EBPF_WORKLOAD_PID" > "$REF_DIR/target_pid.txt"
 
 if ! wait_for_proc_file "$EBPF_WORKLOAD_PID" "stat"; then
@@ -314,6 +327,7 @@ LOADER_CMD=(
     --sample-rate "$SAMPLE_RATE"
     --pmu-backend "$PMU_BACKEND"
     --emit-events
+    --sync-target
 )
 if [[ $TRACK_CHILDREN -eq 1 ]]; then
     LOADER_CMD+=(--track-children)

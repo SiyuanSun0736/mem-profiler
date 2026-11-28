@@ -80,25 +80,39 @@ def run_ebpf(emit_events: bool = False) -> tuple[float, float, int]:
         shutil.rmtree(out_run)
     out_run.mkdir(parents=True, exist_ok=True)
 
-    t0 = time.perf_counter()
-    p_bench = subprocess.Popen([str(BENCH_BIN), "-r", str(ROUNDS)],
+    p_bench = subprocess.Popen([str(BENCH_BIN), "-r", str(ROUNDS), "-w"],
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    
+    for _ in range(50):
+        try:
+            stat = open(f"/proc/{p_bench.pid}/stat").read().split()[2]
+            if stat == "T":
+                break
+        except Exception:
+            pass
+        time.sleep(0.01)
+
     loader_cmd = [
         sys.executable, str(ROOT_DIR / "src/loader.py"),
         "--pid", str(p_bench.pid),
         "--window", "1.0",
         "--duration", "0",
         "--output", str(out_run),
+        "--sync-target",
     ]
     if emit_events:
         loader_cmd.extend(["--emit-events", "--pmu-backend", "bcc"])
     else:
         loader_cmd.extend(["--pmu-backend", "auto"])
 
+    t0 = time.perf_counter()
     p_loader = subprocess.Popen(loader_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    stdout, _ = p_bench.communicate()
+    try:
+        stdout, _ = p_bench.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        p_bench.kill()
+        p_loader.kill()
+        raise RuntimeError("bench_mem timed out waiting for loader/completion")
     t1 = time.perf_counter()
     wall_ms = (t1 - t0) * 1000.0
     internal_ms = parse_bench_time(stdout)

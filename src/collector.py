@@ -330,6 +330,7 @@ class Collector:
         per_tid: bool = False,
         track_children: bool = False,
         pmu_backend: str = "auto",
+        fault_backend: str = "tracepoint",
     ) -> None:
         self.target_pid = target_pid
         self.target_tid = target_tid
@@ -345,6 +346,7 @@ class Collector:
         self.enable_mm_syscalls = enable_mm_syscalls
         self.per_tid = per_tid or target_tid > 0
         self.pmu_backend = pmu_backend
+        self.fault_backend = fault_backend
         self._use_bcc_pmu = pmu_backend == "bcc"
         self._llc_store_via_generic = False
         self._perf_backend: Optional[PerfCounterBackend] = None
@@ -446,10 +448,8 @@ class Collector:
         attr.branch_sample_type = branch_sample_type
         attr.exclude_kernel = 1
         attr.exclude_hv = 1
-        flags = getattr(attr, "flags", 0) | _PERF_ATTR_FLAG_EXCLUDE_KERNEL | _PERF_ATTR_FLAG_EXCLUDE_HV
         if inherit:
-            flags |= _PERF_ATTR_FLAG_INHERIT
-        attr.flags = flags
+            attr.inherit = 1
         return attr
 
     def _attach_raw_event(
@@ -507,7 +507,7 @@ class Collector:
 
         if inherit:
             for attr, _, _ in events:
-                attr.flags = getattr(attr, "flags", 0) | _PERF_ATTR_FLAG_INHERIT
+                attr.inherit = 1
 
         from bcc import BPF
         from bcc.utils import get_online_cpus
@@ -921,9 +921,13 @@ class Collector:
             )
 
         if self.enable_fault:
-            bpf.attach_kprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault")
-            bpf.attach_kretprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault_return")
-            print("[probe] handle_mm_fault kprobe+kretprobe", flush=True)
+            if self.fault_backend == "tracepoint":
+                bpf.attach_tracepoint(tp=b"exceptions:page_fault_user", fn_name=b"on_page_fault_tp")
+                print("[probe] exceptions:page_fault_user tracepoint", flush=True)
+            else:
+                bpf.attach_kprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault")
+                bpf.attach_kretprobe(event=b"handle_mm_fault", fn_name=b"on_page_fault_return")
+                print("[probe] handle_mm_fault kprobe+kretprobe", flush=True)
 
         if self.enable_mm_syscalls:
             self._attach_mm_syscall_probes()

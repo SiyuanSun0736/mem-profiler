@@ -117,6 +117,43 @@ def _addr2line_batch(binary: str, offsets_tuple: tuple[int, ...]) -> list[Symbol
     return results
 
 
+_KALLSYMS_CACHE: tuple[list[int], list[str]] | None = None
+
+def load_kallsyms() -> tuple[list[int], list[str]]:
+    """读取并缓存 /proc/kallsyms 内核符号表。"""
+    global _KALLSYMS_CACHE
+    if _KALLSYMS_CACHE is not None:
+        return _KALLSYMS_CACHE
+    addrs: list[int] = []
+    syms: list[str] = []
+    kallsyms_path = pathlib.Path("/proc/kallsyms")
+    if kallsyms_path.exists():
+        try:
+            for line in kallsyms_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                parts = line.split()
+                if len(parts) >= 3 and parts[1].upper() in ("T", "W"):
+                    addr = int(parts[0], 16)
+                    if addr > 0:
+                        addrs.append(addr)
+                        syms.append(parts[2])
+        except Exception:
+            pass
+    _KALLSYMS_CACHE = (addrs, syms)
+    return _KALLSYMS_CACHE
+
+
+def find_kernel_symbol(addr: int) -> str | None:
+    """使用二分查找将内核 IP 映射到内核函数名。"""
+    import bisect
+    addrs, syms = load_kallsyms()
+    if not addrs:
+        return None
+    idx = bisect.bisect_right(addrs, addr) - 1
+    if 0 <= idx < len(syms):
+        return f"[k] {syms[idx]}"
+    return None
+
+
 def symbolize_addresses(
     pid: int,
     addrs: list[int],
@@ -137,8 +174,22 @@ def symbolize_addresses(
     # 按 DSO 分组，减少 addr2line 调用次数
     groups: dict[str, list[tuple[int, int]]] = {}  # dso → [(addr, offset), ...]
     addr_to_entry: dict[int, tuple[str, int]] = {}  # addr → (dso, offset)
+    results_by_addr: dict[int, SymbolInfo] = {}
 
     for addr in addrs:
+        # 若是内核空间地址，直接走 kallsyms 解析
+        if addr >= 0x7fff000000000000:
+            ksym = find_kernel_symbol(addr)
+            if ksym:
+                results_by_addr[addr] = SymbolInfo(
+                    func=ksym,
+                    source_file="",
+                    source_line=0,
+                    dso="[kernel.kallsyms]",
+                    offset=addr,
+                )
+                continue
+
         entry = find_map_entry(addr, maps)
         if entry and entry.path and entry.path.startswith("/"):
             offset = addr - entry.start + entry.offset
@@ -149,7 +200,6 @@ def symbolize_addresses(
         addr_to_entry[addr] = (dso, offset)
         groups.setdefault(dso, []).append((addr, offset))
 
-    results_by_addr: dict[int, SymbolInfo] = {}
     for dso, addr_offsets in groups.items():
         if dso == "[unknown]":
             for addr, offset in addr_offsets:
